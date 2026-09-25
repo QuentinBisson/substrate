@@ -214,17 +214,12 @@ func MetricsExportDisabled() bool {
 // InitMetrics registers a global MeterProvider with both a Prometheus
 // reader (exposed via StartMetricsServer's /metrics handler) and an
 // OTLP periodic reader, the latter unless OTEL_METRICS_EXPORTER is "none".
-// No Producer option, unlike InitMetricsPushOnly: a bridged registry would be
-// served twice, here and on its own endpoint.
-func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
-	return InitMetricsInto(ctx, serviceName, nil)
-}
-
-// InitMetricsInto is InitMetrics with the Prometheus reader registered on reg
-// instead of the default registry, for a binary whose scraped endpoint serves
-// a registry of its own (atecontroller: controller-runtime's). A nil reg is
-// the default registry.
-func InitMetricsInto(ctx context.Context, serviceName string, reg promclient.Registerer) (*sdkmetric.MeterProvider, error) {
+// The Prometheus reader registers on reg, or on the default registry when reg
+// is nil; a binary whose scraped endpoint serves a registry of its own passes
+// that one (atecontroller: controller-runtime's). No Producer option, unlike
+// InitMetricsPushOnly: a bridged registry would be served twice, here and on
+// its own endpoint.
+func InitMetrics(ctx context.Context, serviceName string, reg promclient.Registerer) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}

@@ -309,9 +309,9 @@ func TestMetricsExportDisabled(t *testing.T) {
 func TestInitMetricsExportsOverOTLPByDefault(t *testing.T) {
 	accepted := otlpTarget(t)
 	t.Setenv(metricsExporterEnv, "")
-	mp, err := InitMetricsInto(context.Background(), "test-default", prometheus.NewRegistry())
+	mp, err := InitMetrics(context.Background(), "test-default", prometheus.NewRegistry())
 	if err != nil {
-		t.Fatalf("InitMetricsInto: %v", err)
+		t.Fatalf("InitMetrics: %v", err)
 	}
 	ctr, err := mp.Meter("test").Int64Counter("ate.test.default.count")
 	if err != nil {
@@ -331,9 +331,9 @@ func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
 	accepted := otlpTarget(t)
 	t.Setenv(metricsExporterEnv, "none")
 	reg := prometheus.NewRegistry()
-	mp, err := InitMetricsInto(context.Background(), "test-none", reg)
+	mp, err := InitMetrics(context.Background(), "test-none", reg)
 	if err != nil {
-		t.Fatalf("InitMetricsInto: %v", err)
+		t.Fatalf("InitMetrics: %v", err)
 	}
 	ctr, err := mp.Meter("test").Int64Counter("ate.test.none.count")
 	if err != nil {
@@ -344,7 +344,7 @@ func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
 	rec := httptest.NewRecorder()
 	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if !strings.Contains(rec.Body.String(), "ate_test_none_count_total") {
-		t.Errorf("the registry passed to InitMetricsInto does not serve the instrument:\n%s", rec.Body.String())
+		t.Errorf("the registry passed to InitMetrics does not serve the instrument:\n%s", rec.Body.String())
 	}
 	flushAndShutdown(t, mp)
 	if n := accepted.Load(); n != 0 {
@@ -377,7 +377,7 @@ func TestInitMetricsPushOnlyRequiresServiceName(t *testing.T) {
 }
 
 func TestInitMetricsRequiresServiceName(t *testing.T) {
-	if _, err := InitMetrics(context.Background(), ""); err == nil {
+	if _, err := InitMetrics(context.Background(), "", nil); err == nil {
 		t.Error("InitMetrics(\"\") must return an error")
 	}
 }

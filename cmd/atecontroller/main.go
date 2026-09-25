@@ -129,7 +129,7 @@ func main() {
 	// endpoint serves both.
 	var mp *sdkmetric.MeterProvider
 	if serverboot.MetricsExportDisabled() {
-		mp, err = serverboot.InitMetricsInto(ctx, serviceName, ctrlmetrics.Registry)
+		mp, err = serverboot.InitMetrics(ctx, serviceName, ctrlmetrics.Registry)
 	} else {
 		mp, err = serverboot.InitMetricsPushOnly(ctx, serviceName,
 			prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry)))
