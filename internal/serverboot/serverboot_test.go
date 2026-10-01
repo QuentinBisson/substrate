@@ -293,7 +293,7 @@ func otlpTarget(t *testing.T) *atomic.Int32 {
 
 func flushAndShutdown(t *testing.T, mp *sdkmetric.MeterProvider) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	_ = mp.ForceFlush(ctx)
 	_ = mp.Shutdown(ctx)
@@ -339,7 +339,7 @@ func TestMetricsPushEnabledWarnsOnUnsupportedValue(t *testing.T) {
 func TestInitMetricsExportsOverOTLPByDefault(t *testing.T) {
 	accepted := otlpTarget(t)
 	t.Setenv(metricsExporterEnv, "")
-	mp, err := InitMetrics(context.Background(), "test-default")
+	mp, err := InitMetrics(t.Context(), "test-default")
 	if err != nil {
 		t.Fatalf("InitMetrics: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestInitMetricsExportsOverOTLPByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create counter: %v", err)
 	}
-	ctr.Add(context.Background(), 1)
+	ctr.Add(t.Context(), 1)
 	flushAndShutdown(t, mp)
 	if accepted.Load() == 0 {
 		t.Error("the OTLP reader never dialed OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -360,7 +360,7 @@ func TestInitMetricsExportsOverOTLPByDefault(t *testing.T) {
 func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
 	accepted := otlpTarget(t)
 	t.Setenv(metricsExporterEnv, "none")
-	mp, err := InitMetrics(context.Background(), "test-none")
+	mp, err := InitMetrics(t.Context(), "test-none")
 	if err != nil {
 		t.Fatalf("InitMetrics: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create counter: %v", err)
 	}
-	ctr.Add(context.Background(), 1)
+	ctr.Add(t.Context(), 1)
 
 	rec := httptest.NewRecorder()
 	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -384,7 +384,7 @@ func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
 func TestInitMetricsPushOnlyExporterNoneExportsNothing(t *testing.T) {
 	accepted := otlpTarget(t)
 	t.Setenv(metricsExporterEnv, "none")
-	mp, err := InitMetricsPushOnly(context.Background(), "test-pushonly-none")
+	mp, err := InitMetricsPushOnly(t.Context(), "test-pushonly-none")
 	if err != nil {
 		t.Fatalf("InitMetricsPushOnly: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestInitMetricsPushOnlyExporterNoneExportsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create counter: %v", err)
 	}
-	ctr.Add(context.Background(), 1)
+	ctr.Add(t.Context(), 1)
 	flushAndShutdown(t, mp)
 	if n := accepted.Load(); n != 0 {
 		t.Errorf("OTEL_METRICS_EXPORTER=none still dialed the OTLP endpoint %d time(s)", n)
@@ -504,6 +504,12 @@ func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
 	for _, name := range []string{"ate.test.bridged.count", "test_bridged_family"} {
 		if pushed[name] != 1 {
 			t.Errorf("%s pushed %d time(s) in one export, want 1 (got %v)", name, pushed[name], pushed)
+		}
+	}
+	// A second copy would come back through the bridge under its Prometheus name.
+	for name := range pushed {
+		if strings.HasPrefix(name, "ate_test_bridged_count") {
+			t.Errorf("the OTel instrument was pushed again through the bridge as %s", name)
 		}
 	}
 }
