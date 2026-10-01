@@ -201,41 +201,24 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	return tp, nil
 }
 
-// metricsExporterEnv follows the OpenTelemetry SDK environment variable spec,
-// restricted to the values serverboot can honor: otlp, and none, which drops
-// the OTLP periodic reader so a component whose metrics are also scraped does
-// not reach the backend twice.
 const metricsExporterEnv = "OTEL_METRICS_EXPORTER"
 
-// metricsPushEnabled applies OTEL_METRICS_EXPORTER. An unrecognized value keeps
-// the OTLP export and logs, the same way ResolveLogsExporter treats
-// OTEL_LOGS_EXPORTER.
+// metricsPushEnabled applies OTEL_METRICS_EXPORTER: otlp, the default, or none,
+// which drops the OTLP reader for a component whose metrics are scraped
+// instead. An unrecognized value keeps the OTLP export and logs, the same way
+// ResolveLogsExporter treats OTEL_LOGS_EXPORTER.
 func metricsPushEnabled(ctx context.Context) bool {
-	value, isSet := os.LookupEnv(metricsExporterEnv)
-	push, err := resolveMetricsExporter(value, isSet)
-	if err != nil {
-		slog.WarnContext(ctx, "Invalid metrics exporter environment, keeping the OTLP export",
-			slog.String("exporter", value),
-			slog.Any("err", err))
-	}
-	return push
-}
-
-// resolveMetricsExporter accepts otlp and none and reports whether the OTLP
-// reader is installed. Any error means the OTLP reader was kept.
-func resolveMetricsExporter(value string, isSet bool) (bool, error) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	// Treat set-but-empty as unset: templated manifests can render empty env vars.
-	if !isSet || value == "" {
-		return true, nil
-	}
-	switch value {
-	case "otlp":
-		return true, nil
+	switch value := strings.ToLower(strings.TrimSpace(os.Getenv(metricsExporterEnv))); value {
+	case "", "otlp":
+		return true
 	case "none":
-		return false, nil
+		return false
+	default:
+		slog.WarnContext(ctx, "Unsupported metrics exporter, keeping the OTLP export",
+			slog.String("env", metricsExporterEnv),
+			slog.String("exporter", value))
+		return true
 	}
-	return true, fmt.Errorf("unsupported %s %q", metricsExporterEnv, value)
 }
 
 // InitMetrics registers a global MeterProvider with both a Prometheus
