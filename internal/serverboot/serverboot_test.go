@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -135,7 +137,7 @@ func TestRelayAttrs(t *testing.T) {
 func collectedResource(t *testing.T, relayCapable bool, conn *grpc.ClientConn) map[string]string {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	mp, err := newMeterProvider(context.Background(), "ateom-gvisor", relayCapable, conn, nil, reader)
+	mp, err := newMeterProvider(context.Background(), "ateom-gvisor", true, relayCapable, conn, nil, reader)
 	if err != nil {
 		t.Fatalf("newMeterProvider: %v", err)
 	}
@@ -297,19 +299,47 @@ func flushAndShutdown(t *testing.T, mp *sdkmetric.MeterProvider) {
 	_ = mp.Shutdown(ctx)
 }
 
-func TestMetricsExportDisabled(t *testing.T) {
-	for value, want := range map[string]bool{"": false, "otlp": false, "none": true, " None ": true, "prometheus": false} {
-		t.Setenv(metricsExporterEnv, value)
-		if got := MetricsExportDisabled(); got != want {
-			t.Errorf("%s=%q: MetricsExportDisabled() = %t, want %t", metricsExporterEnv, value, got, want)
+func TestResolveMetricsExporter(t *testing.T) {
+	for _, tc := range []struct {
+		value    string
+		isSet    bool
+		wantPush bool
+		wantErr  bool
+	}{
+		{value: "", isSet: false, wantPush: true},
+		{value: "", isSet: true, wantPush: true},
+		{value: "otlp", isSet: true, wantPush: true},
+		{value: " OTLP ", isSet: true, wantPush: true},
+		{value: "none", isSet: true, wantPush: false},
+		{value: " None ", isSet: true, wantPush: false},
+		{value: "prometheus", isSet: true, wantPush: true, wantErr: true},
+	} {
+		push, err := resolveMetricsExporter(tc.value, tc.isSet)
+		if push != tc.wantPush || (err != nil) != tc.wantErr {
+			t.Errorf("resolveMetricsExporter(%q, %t) = %t, %v; want %t, error %t", tc.value, tc.isSet, push, err, tc.wantPush, tc.wantErr)
 		}
+	}
+}
+
+func TestMetricsPushEnabledWarnsOnUnsupportedValue(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	t.Setenv(metricsExporterEnv, "prometheus")
+	if !metricsPushEnabled(t.Context()) {
+		t.Error("an unsupported OTEL_METRICS_EXPORTER must keep the OTLP export")
+	}
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "prometheus") {
+		t.Errorf("no warning for an unsupported OTEL_METRICS_EXPORTER:\n%s", buf.String())
 	}
 }
 
 func TestInitMetricsExportsOverOTLPByDefault(t *testing.T) {
 	accepted := otlpTarget(t)
 	t.Setenv(metricsExporterEnv, "")
-	mp, err := InitMetrics(context.Background(), "test-default", prometheus.NewRegistry())
+	mp, err := InitMetrics(context.Background(), "test-default")
 	if err != nil {
 		t.Fatalf("InitMetrics: %v", err)
 	}
@@ -330,8 +360,7 @@ func TestInitMetricsExportsOverOTLPByDefault(t *testing.T) {
 func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
 	accepted := otlpTarget(t)
 	t.Setenv(metricsExporterEnv, "none")
-	reg := prometheus.NewRegistry()
-	mp, err := InitMetrics(context.Background(), "test-none", reg)
+	mp, err := InitMetrics(context.Background(), "test-none")
 	if err != nil {
 		t.Fatalf("InitMetrics: %v", err)
 	}
@@ -342,9 +371,9 @@ func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
 	ctr.Add(context.Background(), 1)
 
 	rec := httptest.NewRecorder()
-	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if !strings.Contains(rec.Body.String(), "ate_test_none_count_total") {
-		t.Errorf("the registry passed to InitMetrics does not serve the instrument:\n%s", rec.Body.String())
+		t.Errorf("/metrics does not serve the instrument:\n%s", rec.Body.String())
 	}
 	flushAndShutdown(t, mp)
 	if n := accepted.Load(); n != 0 {
@@ -370,6 +399,149 @@ func TestInitMetricsPushOnlyExporterNoneExportsNothing(t *testing.T) {
 	}
 }
 
+// metricsCollector is an OTLP metrics endpoint that records every export.
+type metricsCollector struct {
+	colmetricspb.UnimplementedMetricsServiceServer
+	mu       sync.Mutex
+	requests []*colmetricspb.ExportMetricsServiceRequest
+}
+
+func (c *metricsCollector) Export(_ context.Context, req *colmetricspb.ExportMetricsServiceRequest) (*colmetricspb.ExportMetricsServiceResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.requests = append(c.requests, req)
+	return &colmetricspb.ExportMetricsServiceResponse{}, nil
+}
+
+// firstExportNames counts the metric names in the first export received, so
+// cumulative re-exports on shutdown do not read as duplicates.
+func (c *metricsCollector) firstExportNames(t *testing.T) map[string]int {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.requests) == 0 {
+		t.Fatal("the OTLP collector received no export")
+	}
+	names := map[string]int{}
+	for _, rm := range c.requests[0].GetResourceMetrics() {
+		for _, sm := range rm.GetScopeMetrics() {
+			for _, m := range sm.GetMetrics() {
+				names[m.GetName()]++
+			}
+		}
+	}
+	return names
+}
+
+// startMetricsCollector serves a metricsCollector on a loopback port and
+// points OTEL_EXPORTER_OTLP_ENDPOINT at it.
+func startMetricsCollector(t *testing.T) *metricsCollector {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	collector := &metricsCollector{}
+	srv := grpc.NewServer()
+	colmetricspb.RegisterMetricsServiceServer(srv, collector)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(srv.Stop)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+ln.Addr().String())
+	return collector
+}
+
+// bridgedRegistry stands in for controller-runtime's registry: a family
+// recorded outside the OTel SDK.
+func bridgedRegistry(t *testing.T) *prometheus.Registry {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_bridged_family", Help: "recorded outside the OTel SDK"})
+	reg.MustRegister(gauge)
+	gauge.Set(1)
+	return reg
+}
+
+func gatheredNames(t *testing.T, reg prometheus.Gatherer) map[string]bool {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	names := map[string]bool{}
+	for _, f := range families {
+		names[f.GetName()] = true
+	}
+	return names
+}
+
+// With the OTLP export, the bridged family and the OTel instrument are each
+// pushed once, and the instrument stays off the bridged registry: there the
+// bridge would push it a second time.
+func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
+	collector := startMetricsCollector(t)
+	t.Setenv(metricsExporterEnv, "otlp")
+	reg := bridgedRegistry(t)
+	mp, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg)
+	if err != nil {
+		t.Fatalf("InitMetricsBridged: %v", err)
+	}
+	ctr, err := mp.Meter("test").Int64Counter("ate.test.bridged.count")
+	if err != nil {
+		t.Fatalf("create counter: %v", err)
+	}
+	ctr.Add(t.Context(), 1)
+
+	if names := gatheredNames(t, reg); names["ate_test_bridged_count_total"] {
+		t.Error("the OTel instrument is registered on the bridged registry, so the bridge pushes it twice")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := mp.ForceFlush(ctx); err != nil {
+		t.Fatalf("ForceFlush: %v", err)
+	}
+	pushed := collector.firstExportNames(t)
+	flushAndShutdown(t, mp)
+	for _, name := range []string{"ate.test.bridged.count", "test_bridged_family"} {
+		if pushed[name] != 1 {
+			t.Errorf("%s pushed %d time(s) in one export, want 1 (got %v)", name, pushed[name], pushed)
+		}
+	}
+}
+
+// With OTEL_METRICS_EXPORTER=none, the OTel instrument is served from the
+// bridged registry next to its own families, and nothing is pushed.
+func TestInitMetricsBridgedExporterNoneServesFromRegistry(t *testing.T) {
+	accepted := otlpTarget(t)
+	t.Setenv(metricsExporterEnv, "none")
+	reg := bridgedRegistry(t)
+	mp, err := InitMetricsBridged(t.Context(), "test-bridged-none", reg)
+	if err != nil {
+		t.Fatalf("InitMetricsBridged: %v", err)
+	}
+	ctr, err := mp.Meter("test").Int64Counter("ate.test.bridgednone.count")
+	if err != nil {
+		t.Fatalf("create counter: %v", err)
+	}
+	ctr.Add(t.Context(), 1)
+
+	names := gatheredNames(t, reg)
+	for _, name := range []string{"ate_test_bridgednone_count_total", "test_bridged_family"} {
+		if !names[name] {
+			t.Errorf("the bridged registry does not serve %s: %v", name, names)
+		}
+	}
+	flushAndShutdown(t, mp)
+	if n := accepted.Load(); n != 0 {
+		t.Errorf("OTEL_METRICS_EXPORTER=none still dialed the OTLP endpoint %d time(s)", n)
+	}
+}
+
+func TestInitMetricsBridgedRequiresServiceName(t *testing.T) {
+	if _, err := InitMetricsBridged(t.Context(), "", prometheus.NewRegistry()); err == nil {
+		t.Error("InitMetricsBridged(\"\") must return an error")
+	}
+}
+
 func TestInitMetricsPushOnlyRequiresServiceName(t *testing.T) {
 	if _, err := InitMetricsPushOnly(context.Background(), ""); err == nil {
 		t.Error("InitMetricsPushOnly(\"\") must return an error")
@@ -377,7 +549,7 @@ func TestInitMetricsPushOnlyRequiresServiceName(t *testing.T) {
 }
 
 func TestInitMetricsRequiresServiceName(t *testing.T) {
-	if _, err := InitMetrics(context.Background(), "", nil); err == nil {
+	if _, err := InitMetrics(context.Background(), ""); err == nil {
 		t.Error("InitMetrics(\"\") must return an error")
 	}
 }

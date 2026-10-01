@@ -82,7 +82,7 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	mp, err := serverboot.InitMetrics(ctx, serviceName, nil)
+	mp, err := serverboot.InitMetrics(ctx, serviceName)
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}

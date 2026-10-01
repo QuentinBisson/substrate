@@ -144,7 +144,7 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetrics(ctx, "atelet", nil)
+	mp, err := serverboot.InitMetrics(ctx, "atelet")
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
