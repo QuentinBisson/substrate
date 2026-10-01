@@ -239,9 +239,9 @@ func TestHealthzAbsentUnlessEnabled(t *testing.T) {
 }
 
 func TestInitMetricsPushOnlyHasNoPrometheusSurface(t *testing.T) {
-	mp, err := InitMetricsPushOnly(context.Background(), "test-pushonly")
+	mp, err := InitMetricsPushOnlyVia(context.Background(), "test-pushonly", nil)
 	if err != nil {
-		t.Fatalf("InitMetricsPushOnly: %v", err)
+		t.Fatalf("InitMetricsPushOnlyVia: %v", err)
 	}
 	// Bound shutdown: the periodic reader would otherwise block flushing to the
 	// unreachable default OTLP endpoint until the export timeout.
@@ -384,9 +384,9 @@ func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
 func TestInitMetricsPushOnlyExporterNoneExportsNothing(t *testing.T) {
 	accepted := otlpTarget(t)
 	t.Setenv(metricsExporterEnv, "none")
-	mp, err := InitMetricsPushOnly(t.Context(), "test-pushonly-none")
+	mp, err := InitMetricsPushOnlyVia(t.Context(), "test-pushonly-none", nil)
 	if err != nil {
-		t.Fatalf("InitMetricsPushOnly: %v", err)
+		t.Fatalf("InitMetricsPushOnlyVia: %v", err)
 	}
 	ctr, err := mp.Meter("test").Int64Counter("ate.test.pushonlynone.count")
 	if err != nil {
@@ -549,8 +549,8 @@ func TestInitMetricsBridgedRequiresServiceName(t *testing.T) {
 }
 
 func TestInitMetricsPushOnlyRequiresServiceName(t *testing.T) {
-	if _, err := InitMetricsPushOnly(context.Background(), ""); err == nil {
-		t.Error("InitMetricsPushOnly(\"\") must return an error")
+	if _, err := InitMetricsPushOnlyVia(context.Background(), "", nil); err == nil {
+		t.Error("InitMetricsPushOnlyVia(\"\") must return an error")
 	}
 }
 

@@ -241,9 +241,7 @@ func resolveMetricsExporter(value string, isSet bool) (bool, error) {
 // InitMetrics registers a global MeterProvider with both a Prometheus
 // reader (exposed via StartMetricsServer's /metrics handler) and an
 // OTLP periodic reader, the latter unless OTEL_METRICS_EXPORTER is "none".
-// The Prometheus reader registers on the default registry. No Producer option,
-// unlike InitMetricsPushOnly: a bridged registry would be served twice, here
-// and on its own endpoint.
+// The Prometheus reader registers on the default registry.
 func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
@@ -280,19 +278,12 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 	return newMeterProvider(ctx, serviceName, false, false, nil, nil, promReader)
 }
 
-// InitMetricsPushOnly is InitMetrics without the Prometheus reader, for binaries
-// that run no metrics HTTP server of their own (ateom): a pull reader would
-// collect into a registry nothing serves. producers put metrics recorded
-// outside the OTel SDK on the same push path.
-func InitMetricsPushOnly(ctx context.Context, serviceName string, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx), false, nil, producers)
-}
-
-// InitMetricsPushOnlyVia is InitMetricsPushOnly with an explicit exporter
-// connection: the metrics counterpart of TracingOptions.ExporterConn. ateom
-// passes atelet's relay socket (internal/otlprelay) so the worker pod needs no
-// network path of its own; a nil conn keeps the direct dial to
-// OTEL_EXPORTER_OTLP_ENDPOINT.
+// InitMetricsPushOnlyVia is InitMetrics without the Prometheus reader, for a
+// binary that runs no metrics HTTP server of its own (ateom): a pull reader
+// would collect into a registry nothing serves. conn is the metrics counterpart
+// of TracingOptions.ExporterConn: ateom passes atelet's relay socket
+// (internal/otlprelay) so the worker pod needs no network path of its own; a
+// nil conn keeps the direct dial to OTEL_EXPORTER_OTLP_ENDPOINT.
 //
 // The caller owns the connection: the meter provider's Shutdown does not close
 // a connection it did not create.
@@ -302,8 +293,8 @@ func InitMetricsPushOnly(ctx context.Context, serviceName string, producers ...s
 // "direct" without one. It is the metrics counterpart of
 // TracingOptions.RelayCapable, implied rather than a parameter because only a
 // caller that has a relay to pass reaches for this function in the first place.
-func InitMetricsPushOnlyVia(ctx context.Context, serviceName string, conn *grpc.ClientConn, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx), true, conn, producers)
+func InitMetricsPushOnlyVia(ctx context.Context, serviceName string, conn *grpc.ClientConn) (*sdkmetric.MeterProvider, error) {
+	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx), true, conn, nil)
 }
 
 func newMeterProvider(ctx context.Context, serviceName string, push, relayCapable bool, conn *grpc.ClientConn, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
