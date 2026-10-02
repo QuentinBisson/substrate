@@ -121,8 +121,9 @@ func main() {
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// controller-runtime records reconcile, workqueue, and runtime metrics into its
-	// own Prometheus registry, which the manager serves.
-	mp, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry)
+	// own Prometheus registry, which the manager serves. On the OTLP path the
+	// bridged queue histograms are padded so the Telemetry API accepts idle ones.
+	mp, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry, padEmptyExponentialHistograms)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
@@ -250,7 +251,7 @@ func main() {
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, workerPodInformer, workerPoolInformer.Informer()).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer()).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())

@@ -243,16 +243,22 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 // since the bridge would otherwise push them a second time. With
 // OTEL_METRICS_EXPORTER=none nothing is pushed and the OTel instruments
 // register on reg, so its endpoint serves both.
+//
+// wrapProducer, when non-nil, wraps the bridge producer on the OTLP path, for
+// a rewrite the push backend needs but the scraped endpoint does not.
 func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 	promclient.Registerer
 	promclient.Gatherer
-}) (*sdkmetric.MeterProvider, error) {
+}, wrapProducer func(sdkmetric.Producer) sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
 	if metricsPushEnabled(ctx) {
-		return newMeterProvider(ctx, serviceName, true, false, nil,
-			[]sdkmetric.Producer{prombridge.NewMetricProducer(prombridge.WithGatherer(reg))})
+		var producer sdkmetric.Producer = prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
+		if wrapProducer != nil {
+			producer = wrapProducer(producer)
+		}
+		return newMeterProvider(ctx, serviceName, true, false, nil, []sdkmetric.Producer{producer})
 	}
 	promReader, err := prometheus.New(prometheus.WithRegisterer(reg))
 	if err != nil {

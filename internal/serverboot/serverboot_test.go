@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -421,7 +422,7 @@ func bridgedRegistry(t *testing.T) *prometheus.Registry {
 func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
 	collector := startMetricsCollector(t, "otlp")
 	reg := bridgedRegistry(t)
-	mp, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg)
+	mp, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
 	if err != nil {
 		t.Fatalf("InitMetricsBridged: %v", err)
 	}
@@ -435,12 +436,39 @@ func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
 	}
 }
 
+// wrapProducer sits between the bridge and the OTLP push.
+func TestInitMetricsBridgedWrapsPushedProducer(t *testing.T) {
+	collector := startMetricsCollector(t, "otlp")
+	var produced atomic.Bool
+	wrap := func(inner sdkmetric.Producer) sdkmetric.Producer {
+		return producerFunc(func(ctx context.Context) ([]metricdata.ScopeMetrics, error) {
+			produced.Store(true)
+			return inner.Produce(ctx)
+		})
+	}
+	mp, err := InitMetricsBridged(t.Context(), "test-bridged-wrap", bridgedRegistry(t), wrap)
+	if err != nil {
+		t.Fatalf("InitMetricsBridged: %v", err)
+	}
+	pushed := collector.flush(t, mp)
+	if !produced.Load() {
+		t.Error("the OTLP reader did not collect through wrapProducer")
+	}
+	if pushed["test_bridged_family"] != 1 {
+		t.Errorf("want test_bridged_family pushed once through the wrapper, got %v", pushed)
+	}
+}
+
+type producerFunc func(context.Context) ([]metricdata.ScopeMetrics, error)
+
+func (f producerFunc) Produce(ctx context.Context) ([]metricdata.ScopeMetrics, error) { return f(ctx) }
+
 // With OTEL_METRICS_EXPORTER=none, the OTel instrument is served from the
 // bridged registry next to its own families, and nothing is pushed.
 func TestInitMetricsBridgedExporterNoneServesFromRegistry(t *testing.T) {
 	collector := startMetricsCollector(t, "none")
 	reg := bridgedRegistry(t)
-	mp, err := InitMetricsBridged(t.Context(), "test-bridged-none", reg)
+	mp, err := InitMetricsBridged(t.Context(), "test-bridged-none", reg, nil)
 	if err != nil {
 		t.Fatalf("InitMetricsBridged: %v", err)
 	}
@@ -455,7 +483,7 @@ func TestInitMetricsBridgedExporterNoneServesFromRegistry(t *testing.T) {
 }
 
 func TestInitMetricsBridgedRequiresServiceName(t *testing.T) {
-	if _, err := InitMetricsBridged(t.Context(), "", prometheus.NewRegistry()); err == nil {
+	if _, err := InitMetricsBridged(t.Context(), "", prometheus.NewRegistry(), nil); err == nil {
 		t.Error("InitMetricsBridged(\"\") must return an error")
 	}
 }
