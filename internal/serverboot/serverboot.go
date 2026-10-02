@@ -254,7 +254,7 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 		return nil, fmt.Errorf("serviceName is required")
 	}
 	if metricsPushEnabled(ctx) {
-		var producer sdkmetric.Producer = prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
+		producer := prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
 		if wrapProducer != nil {
 			producer = wrapProducer(producer)
 		}
