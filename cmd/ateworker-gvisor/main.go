@@ -671,6 +671,11 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			}
 		}
 	}()
+	// Egress before the sandbox starts, ingress after the wakeup probe (see
+	// tunnel.Tunnel.ActivateEgress).
+	if err := s.tunnel.ActivateEgress(attribution, egress); err != nil {
+		return nil, err
+	}
 	containersToDelete = append(containersToDelete, ocispec.SandboxID)
 	// Attribute the sandbox's runsc CLI output to the actor.
 	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
@@ -714,7 +719,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	if err := s.tunnel.Activate(workerstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
+	if err := s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid())); err != nil {
 		return nil, err
 	}
 
@@ -1084,6 +1089,13 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			}
 		}
 	}()
+	// As in RunWorkload: egress before the containers restore, ingress after
+	// the wakeup probe.
+	err = s.tunnel.ActivateEgress(attribution, egress)
+	timing.activate = lap(&tLast)
+	if err != nil {
+		return nil, err
+	}
 	checkpointDir := req.GetActorDirs().GetRestoreDir()
 	restoreArgs, err := fsRestoreArgs(checkpointDir, fidelity)
 	if err != nil {
@@ -1170,8 +1182,8 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	err = s.tunnel.Activate(attribution, s.sandboxDialer(req.GetActorUid()), egress)
-	timing.activate = lap(&tLast)
+	err = s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid()))
+	timing.activate += lap(&tLast)
 	if err != nil {
 		return nil, err
 	}
