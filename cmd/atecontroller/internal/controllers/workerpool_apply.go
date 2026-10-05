@@ -80,9 +80,15 @@ type ateomOTelSettings struct {
 	// default and drops the arg, which is dead config on its own.
 	TracesSampler    string
 	TracesSamplerArg string
-	// LogsExporter is the raw OTEL_LOGS_EXPORTER value. otlp sends the usage
-	// records over OTLP instead of stdout; empty keeps ateom's default, none.
-	LogsExporter string
+	// LogsExporter, TracesExporter and MetricsExporter are the
+	// OTEL_LOGS_EXPORTER, OTEL_TRACES_EXPORTER and OTEL_METRICS_EXPORTER set on
+	// ateom, passed through untouched. They are worker-only values rather than
+	// the controller's own: on the control plane, metrics none means scraped
+	// instead of pushed, and ateom serves no /metrics. Empty keeps ateom's
+	// defaults: none for logs, otlp for traces and metrics.
+	LogsExporter    string
+	TracesExporter  string
+	MetricsExporter string
 }
 
 // workerPoolLabel names the WorkerPool on each of its worker pods.
@@ -308,6 +314,16 @@ func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfigurat
 				WithName("OTEL_TRACES_SAMPLER_ARG").
 				WithValue(otel.TracesSamplerArg))
 		}
+	}
+	if otel.TracesExporter != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_TRACES_EXPORTER").
+			WithValue(otel.TracesExporter))
+	}
+	if otel.MetricsExporter != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_METRICS_EXPORTER").
+			WithValue(otel.MetricsExporter))
 	}
 	return envs
 }

@@ -73,8 +73,14 @@ var (
 	otelTracesSamplerArg = pflag.String("otel-traces-sampler-arg", os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
 		"Trace sampler argument set on ateom worker pods, ignored unless --otel-traces-sampler is set. Defaults to the controller's own OTEL_TRACES_SAMPLER_ARG.")
 
-	otelLogsExporter = pflag.String("otel-logs-exporter", os.Getenv("OTEL_LOGS_EXPORTER"),
-		"Logs exporter set on ateom worker pods. Empty keeps the ateom binary's default, none. Defaults to the controller's own OTEL_LOGS_EXPORTER.")
+	otelLogsExporter = pflag.String("otel-logs-exporter", os.Getenv("ATEOM_OTEL_LOGS_EXPORTER"),
+		"Logs exporter set on ateom worker pods, with OTEL_LOGS_EXPORTER's values. Empty keeps the ateom binary's default, none. Defaults to the controller's ATEOM_OTEL_LOGS_EXPORTER, not its own OTEL_LOGS_EXPORTER.")
+
+	otelTracesExporter = pflag.String("otel-traces-exporter", os.Getenv("ATEOM_OTEL_TRACES_EXPORTER"),
+		"Traces exporter set on ateom worker pods, with OTEL_TRACES_EXPORTER's values. Empty keeps the ateom binary's otlp default. Defaults to the controller's ATEOM_OTEL_TRACES_EXPORTER, not its own OTEL_TRACES_EXPORTER.")
+
+	otelMetricsExporter = pflag.String("otel-metrics-exporter", os.Getenv("ATEOM_OTEL_METRICS_EXPORTER"),
+		"Metrics exporter set on ateom worker pods, with OTEL_METRICS_EXPORTER's values. Empty keeps the ateom binary's otlp default. Defaults to the controller's ATEOM_OTEL_METRICS_EXPORTER, not its own OTEL_METRICS_EXPORTER.")
 
 	ateletServiceAccount = pflag.String("atelet-service-account", installdefaults.AteletServiceAccount, "ServiceAccount atelet runs as. It is the service-account segment of the SPIFFE ID each worker's atunnel expects on the credential broker, so it has to match what the deployment actually creates.")
 	routerServiceAccount = pflag.String("router-service-account", installdefaults.RouterServiceAccount, "ServiceAccount atenet-router runs as. It is the service-account segment of the SPIFFE ID each worker's atunnel accepts on actor ingress, so it has to match what the deployment actually creates.")
@@ -205,6 +211,8 @@ func main() {
 		OTelTracesSampler:        *otelTracesSampler,
 		OTelTracesSamplerArg:     *otelTracesSamplerArg,
 		OTelLogsExporter:         *otelLogsExporter,
+		OTelTracesExporter:       *otelTracesExporter,
+		OTelMetricsExporter:      *otelMetricsExporter,
 		SystemNamespace:          systemNamespace,
 		AteletServiceAccount:     *ateletServiceAccount,
 		RouterServiceAccount:     *routerServiceAccount,
