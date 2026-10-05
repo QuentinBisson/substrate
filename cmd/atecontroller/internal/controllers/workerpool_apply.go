@@ -58,10 +58,11 @@ const (
 )
 
 // workerOTelSettings is the telemetry configuration propagated to worker
-// pods. A zero value leaves the pods without telemetry env.
+// pods. A zero value sets only the worker's resource identity.
 type workerOTelSettings struct {
-	// Endpoint is the OTLP collector address. Empty disables worker telemetry
-	// entirely, so the other fields are ignored.
+	// Endpoint is the OTLP collector address the worker exports to directly, when it
+	// finds no atelet relay. Empty leaves the worker exporting through the relay
+	// only, and exporting nothing without one.
 	Endpoint string
 	// MetricExportInterval overrides the SDK's 60s PeriodicReader interval. It is
 	// the raw OTEL_METRIC_EXPORT_INTERVAL value, i.e. whole milliseconds; the SDK
@@ -99,8 +100,8 @@ const (
 
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
 // Deployment managed by a WorkerPool. Only fields owned by this controller
-// are declared here. otel, when it carries an endpoint, is propagated to the
-// worker container so it pushes telemetry to that collector.
+// are declared here. otel is propagated to the worker container (see
+// workerContainerEnv).
 func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel workerOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
@@ -281,26 +282,24 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel workerOTelSetti
 				WithSpec(podSpecAC)))
 }
 
-// workerContainerEnv adds the OTLP endpoint and resource identity only when
-// telemetry is configured. Every ref precedes OTEL_RESOURCE_ATTRIBUTES so its
-// $(...) substitutions resolve.
+// workerContainerEnv always sets the resource identity, since the worker
+// exports through atelet's relay whenever atelet has a collector, and adds the
+// OTLP endpoint only when one is configured. Every ref precedes
+// OTEL_RESOURCE_ATTRIBUTES so its $(...) substitutions resolve.
 func workerContainerEnv(otel workerOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
-	// The pool pair labels every usage record, telemetry export or not. A
-	// worker pod runs in its WorkerPool's namespace.
+	// The pool pair also labels every usage record. A worker pod runs in its
+	// WorkerPool's namespace.
 	envs := []*corev1ac.EnvVarApplyConfiguration{
 		fieldRefEnv("POD_UID", "metadata.uid"),
 		fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
 		fieldRefEnv("WORKER_POOL_NAME", "metadata.labels['"+workerPoolLabel+"']"),
-	}
-	if otel.Endpoint == "" {
-		return envs
-	}
-	envs = append(envs,
 		fieldRefEnv("POD_NAME", "metadata.name"),
 		fieldRefEnv("NODE_NAME", "spec.nodeName"),
-		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint),
-		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(workerOTelResourceAttributes),
-	)
+	}
+	if otel.Endpoint != "" {
+		envs = append(envs, corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint))
+	}
+	envs = append(envs, corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(workerOTelResourceAttributes))
 	if otel.MetricExportInterval != "" {
 		envs = append(envs, corev1ac.EnvVar().
 			WithName("OTEL_METRIC_EXPORT_INTERVAL").
