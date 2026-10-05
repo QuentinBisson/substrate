@@ -535,15 +535,16 @@ func TestRolloutStrategy(t *testing.T) {
 	}
 }
 
-// TestBuildDeploymentApplyConfigOTelEndpoint asserts the OTLP endpoint and the
-// resource identity are set on the worker container only when an endpoint is
-// configured, and that every ref the value substitutes is declared ahead of it.
+// TestBuildDeploymentApplyConfigOTelEndpoint asserts the OTLP endpoint is set on
+// the worker container only when one is configured, the resource identity
+// always, since the worker also exports through atelet's relay, and that every
+// ref the identity substitutes is declared ahead of it.
 func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 	const endpoint = "http://collector.otel-system.svc:4317"
 	tests := []struct {
-		name          string
-		endpoint      string
-		wantTelemetry bool
+		name         string
+		endpoint     string
+		wantEndpoint bool
 	}{
 		{"endpoint empty", "", false},
 		{"endpoint set", endpoint, true},
@@ -560,17 +561,9 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 				}
 			}
 
-			if !tt.wantTelemetry {
-				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "OTEL_LOGS_EXPORTER", "POD_NAME", "NODE_NAME"} {
-					if _, ok := env[k]; ok {
-						t.Errorf("%s must be absent without an OTLP endpoint", k)
-					}
-				}
-				return
-			}
-
-			if got := env["OTEL_EXPORTER_OTLP_ENDPOINT"].value; got != endpoint {
-				t.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT = %q, want %q", got, endpoint)
+			got, ok := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
+			if ok != tt.wantEndpoint || got.value != tt.endpoint {
+				t.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT = %q (set %t), want %q", got.value, ok, tt.endpoint)
 			}
 			resourceAttrs := env["OTEL_RESOURCE_ATTRIBUTES"].value
 
@@ -598,10 +591,11 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 }
 
 // TestBuildDeploymentApplyConfigMetricExportTuning asserts the export interval and
-// per-export timeout reach the worker container only when each is set alongside an
-// endpoint. worker is invisible to the collector until its first successful export
-// tick, so the kind stack shortens the SDK's 60s interval to keep that gap inside
-// the e2e budget, and its 30s timeout so a failing tick cannot swallow three
+// per-export timeout reach the worker container only when each is set, with or
+// without an endpoint, since the worker also exports through atelet's relay. The
+// worker is invisible to the collector until its first successful export tick,
+// so the kind stack shortens the SDK's 60s interval to keep that gap inside the
+// e2e budget, and its 30s timeout so a failing tick cannot swallow three
 // shortened intervals.
 func TestBuildDeploymentApplyConfigMetricExportTuning(t *testing.T) {
 	const endpoint = "http://collector.otel-system.svc:4317"
@@ -631,9 +625,9 @@ func TestBuildDeploymentApplyConfigMetricExportTuning(t *testing.T) {
 			want: map[string]string{"OTEL_METRIC_EXPORT_TIMEOUT": "10000"},
 		},
 		{
-			name: "ignored without endpoint",
+			name: "set without endpoint",
 			otel: workerOTelSettings{MetricExportInterval: "10000", MetricExportTimeout: "10000"},
-			want: nil,
+			want: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "10000", "OTEL_METRIC_EXPORT_TIMEOUT": "10000"},
 		},
 	}
 	for _, tt := range tests {
@@ -657,7 +651,7 @@ func TestBuildDeploymentApplyConfigMetricExportTuning(t *testing.T) {
 }
 
 // TestBuildDeploymentApplyConfigTracesSamplerPropagation asserts the sampler
-// env pair reaches the worker container only alongside an endpoint, and the arg
+// env pair reaches the worker container with or without an endpoint, and the arg
 // only alongside a sampler: an arg without a sampler name is dead config the
 // SDK ignores.
 func TestBuildDeploymentApplyConfigTracesSamplerPropagation(t *testing.T) {
@@ -688,9 +682,9 @@ func TestBuildDeploymentApplyConfigTracesSamplerPropagation(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "ignored without endpoint",
+			name: "set without endpoint",
 			otel: workerOTelSettings{TracesSampler: "parentbased_traceidratio", TracesSamplerArg: "0.25"},
-			want: nil,
+			want: map[string]string{"OTEL_TRACES_SAMPLER": "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG": "0.25"},
 		},
 	}
 	for _, tt := range tests {
@@ -879,6 +873,19 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithValueFrom(corev1ac.EnvVarSource().
 						WithFieldRef(corev1ac.ObjectFieldSelector().
 							WithFieldPath("metadata.labels['ate.dev/worker-pool']"))),
+				corev1ac.EnvVar().
+					WithName("POD_NAME").
+					WithValueFrom(corev1ac.EnvVarSource().
+						WithFieldRef(corev1ac.ObjectFieldSelector().
+							WithFieldPath("metadata.name"))),
+				corev1ac.EnvVar().
+					WithName("NODE_NAME").
+					WithValueFrom(corev1ac.EnvVarSource().
+						WithFieldRef(corev1ac.ObjectFieldSelector().
+							WithFieldPath("spec.nodeName"))),
+				corev1ac.EnvVar().
+					WithName("OTEL_RESOURCE_ATTRIBUTES").
+					WithValue(workerOTelResourceAttributes),
 			).
 			WithVolumeMounts(
 				corev1ac.VolumeMount().
@@ -1049,7 +1056,8 @@ func TestBuildDeploymentApplyConfigWorkerPoolEnv(t *testing.T) {
 }
 
 // TestBuildDeploymentApplyConfigLogsExporter asserts OTEL_LOGS_EXPORTER
-// reaches the worker container only alongside an endpoint.
+// reaches the worker container whenever it is set, with or without an endpoint,
+// since the worker also exports through atelet's relay.
 func TestBuildDeploymentApplyConfigLogsExporter(t *testing.T) {
 	const endpoint = "http://collector.otel-system.svc:4317"
 	for _, tt := range []struct {
@@ -1059,7 +1067,7 @@ func TestBuildDeploymentApplyConfigLogsExporter(t *testing.T) {
 	}{
 		{"set with endpoint", workerOTelSettings{Endpoint: endpoint, LogsExporter: "otlp"}, "otlp"},
 		{"unset keeps binary default", workerOTelSettings{Endpoint: endpoint}, ""},
-		{"ignored without endpoint", workerOTelSettings{LogsExporter: "otlp"}, ""},
+		{"set without endpoint", workerOTelSettings{LogsExporter: "otlp"}, "otlp"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount, egresspolicy.DNSEgressPolicyEnforceInAtunnel).

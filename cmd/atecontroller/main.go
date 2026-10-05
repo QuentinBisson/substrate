@@ -64,7 +64,7 @@ var (
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 
 	otelEndpoint = pflag.String("otel-exporter-otlp-endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
-		"OTLP endpoint set on worker pods so they push telemetry. Defaults to the controller's own OTEL_EXPORTER_OTLP_ENDPOINT.")
+		"OTLP endpoint set on worker pods, which export to it directly when their node's atelet serves no OTLP relay. Defaults to the controller's own OTEL_EXPORTER_OTLP_ENDPOINT.")
 
 	otelMetricExportInterval = pflag.String("otel-metric-export-interval", os.Getenv("OTEL_METRIC_EXPORT_INTERVAL"),
 		"Metric export interval in milliseconds set on worker pods. Empty keeps the OTel SDK's 60s default. Defaults to the controller's own OTEL_METRIC_EXPORT_INTERVAL.")
