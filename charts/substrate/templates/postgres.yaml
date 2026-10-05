@@ -17,6 +17,12 @@ limitations under the License.
 {{- if .Values.postgres.enabled }}
 {{- $name := include "substrate.fullname" (list "postgres" .) -}}
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ $name }}-config
@@ -110,6 +116,7 @@ spec:
       labels:
         app: {{ $name }}
     spec:
+      serviceAccountName: {{ $name }}
       securityContext:
         # Group ownership of the projected certificate below, and of the data
         # volume so that a freshly provisioned one is writable. OnRootMismatch

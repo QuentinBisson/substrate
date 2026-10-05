@@ -16,6 +16,12 @@ limitations under the License.
 
 {{- if .Values.rustfs.enabled -}}
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "substrate.fullname" (list "rustfs" .) }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "substrate.fullname" (list "rustfs-data" .) }}
@@ -59,6 +65,7 @@ spec:
       labels:
         app: rustfs
     spec:
+      serviceAccountName: {{ include "substrate.fullname" (list "rustfs" .) }}
       securityContext:
         runAsUser: 10001
         runAsGroup: 10001
@@ -104,6 +111,7 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      serviceAccountName: {{ include "substrate.fullname" (list "rustfs" .) }}
       {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       containers:
       - name: create-bucket
