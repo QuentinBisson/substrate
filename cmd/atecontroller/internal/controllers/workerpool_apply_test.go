@@ -707,6 +707,60 @@ func TestBuildDeploymentApplyConfigTracesSamplerPropagation(t *testing.T) {
 	}
 }
 
+// TestBuildDeploymentApplyConfigTracesExporterPropagation asserts
+// OTEL_TRACES_EXPORTER reaches the worker container only when set, with or
+// without an endpoint.
+func TestBuildDeploymentApplyConfigTracesExporterPropagation(t *testing.T) {
+	const endpoint = "http://collector.otel-system.svc:4317"
+	tests := []struct {
+		name    string
+		otel    workerOTelSettings
+		want    string
+		wantSet bool
+	}{
+		{name: "unset keeps binary default", otel: workerOTelSettings{Endpoint: endpoint}},
+		{name: "none with endpoint", otel: workerOTelSettings{Endpoint: endpoint, TracesExporter: "none"}, want: "none", wantSet: true},
+		{name: "none without endpoint", otel: workerOTelSettings{TracesExporter: "none"}, want: "none", wantSet: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount, egresspolicy.DNSEgressPolicyEnforceInAtunnel).
+				Spec.Template.Spec.Containers[0]
+			got, ok := envByName(c.Env)["OTEL_TRACES_EXPORTER"]
+			if ok != tt.wantSet || got.value != tt.want {
+				t.Errorf("OTEL_TRACES_EXPORTER = %q (set %t), want %q (set %t)", got.value, ok, tt.want, tt.wantSet)
+			}
+		})
+	}
+}
+
+// TestBuildDeploymentApplyConfigMetricsExporterPropagation asserts
+// OTEL_METRICS_EXPORTER reaches the worker container only when set, with or
+// without an endpoint.
+func TestBuildDeploymentApplyConfigMetricsExporterPropagation(t *testing.T) {
+	const endpoint = "http://collector.otel-system.svc:4317"
+	tests := []struct {
+		name    string
+		otel    workerOTelSettings
+		want    string
+		wantSet bool
+	}{
+		{name: "unset keeps binary default", otel: workerOTelSettings{Endpoint: endpoint}},
+		{name: "none with endpoint", otel: workerOTelSettings{Endpoint: endpoint, MetricsExporter: "none"}, want: "none", wantSet: true},
+		{name: "none without endpoint", otel: workerOTelSettings{MetricsExporter: "none"}, want: "none", wantSet: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount, egresspolicy.DNSEgressPolicyEnforceInAtunnel).
+				Spec.Template.Spec.Containers[0]
+			got, ok := envByName(c.Env)["OTEL_METRICS_EXPORTER"]
+			if ok != tt.wantSet || got.value != tt.want {
+				t.Errorf("OTEL_METRICS_EXPORTER = %q (set %t), want %q (set %t)", got.value, ok, tt.want, tt.wantSet)
+			}
+		})
+	}
+}
+
 type envInfo struct {
 	index int
 	value string

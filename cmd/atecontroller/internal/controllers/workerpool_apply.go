@@ -82,9 +82,15 @@ type workerOTelSettings struct {
 	// default and drops the arg, which is dead config on its own.
 	TracesSampler    string
 	TracesSamplerArg string
-	// LogsExporter is the raw OTEL_LOGS_EXPORTER value. otlp sends the usage
-	// records over OTLP instead of stdout; empty keeps worker's default, none.
-	LogsExporter string
+	// LogsExporter, TracesExporter and MetricsExporter are the
+	// OTEL_LOGS_EXPORTER, OTEL_TRACES_EXPORTER and OTEL_METRICS_EXPORTER set on
+	// the worker, passed through untouched. They are worker-only values rather than
+	// the controller's own: on the control plane, metrics prometheus means
+	// scraped instead of pushed, and ateworker serves no /metrics. Empty keeps
+	// ateworker's defaults: none for logs, otlp for traces and metrics.
+	LogsExporter    string
+	TracesExporter  string
+	MetricsExporter string
 }
 
 // workerPoolLabel names the WorkerPool on each of its worker pods.
@@ -324,6 +330,16 @@ func workerContainerEnv(otel workerOTelSettings) []*corev1ac.EnvVarApplyConfigur
 				WithName("OTEL_TRACES_SAMPLER_ARG").
 				WithValue(otel.TracesSamplerArg))
 		}
+	}
+	if otel.TracesExporter != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_TRACES_EXPORTER").
+			WithValue(otel.TracesExporter))
+	}
+	if otel.MetricsExporter != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_METRICS_EXPORTER").
+			WithValue(otel.MetricsExporter))
 	}
 	return envs
 }
