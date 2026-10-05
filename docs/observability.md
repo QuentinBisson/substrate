@@ -363,6 +363,8 @@ Distributed tracing tracks the end-to-end flow of requests as they pass through 
 
 Agent Substrate samples traces by default. Each component roots parentless requests at a per-component ratio (10% on the control plane components, 1% at the atenet router), overridable per component through the standard `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` environment variables. Every component uses a parent based sampler, so a client can also force a request to be traced end to end (e.g. via the `--trace` flag). Agent Substrate leverages OpenTelemetry (OTel) for context propagation across the call stack. Each traced request generates a unique trace hash/ID, which you can use to inspect the detailed request lifecycle and span hierarchy inside Google Cloud Trace or Jaeger. See the per-component defaults table in [Tracing Best Practices](dev/best-practices/tracing.md).
 
+A component with `OTEL_TRACES_EXPORTER=none` exports no spans. It still samples and propagates trace context, so the traces of the components around it stay whole. The variable takes a comma-separated list, with the same rules as `OTEL_LOGS_EXPORTER`, and knows `otlp` (the default) and `none`.
+
 ### Local Tracing with Jaeger (Kind Cluster)
 
 For local development inside a `kind` cluster, Agent Substrate automatically provisions a local OpenTelemetry Collector and Jaeger instance.

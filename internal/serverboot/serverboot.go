@@ -173,29 +173,40 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(opts.Sampling.Sampler()),
 	}
-	expOpts := []otlptracegrpc.Option{
-		// GKE managed traces doesn't support validating the TLS certs of the collector.
-		otlptracegrpc.WithInsecure(),
+	// Without an exporter the provider still samples and propagates trace
+	// context, so a component that exports nothing keeps the traces of the
+	// components around it whole.
+	export := tracesPushEnabled(ctx)
+	if export {
+		expOpts := []otlptracegrpc.Option{
+			// GKE managed traces doesn't support validating the TLS certs of the collector.
+			otlptracegrpc.WithInsecure(),
+		}
+		if opts.ExporterConn != nil {
+			// WithGRPCConn takes precedence over endpoint/credential options, so
+			// WithInsecure above is inert on this path.
+			expOpts = append(expOpts, otlptracegrpc.WithGRPCConn(opts.ExporterConn))
+		}
+		exporter, err := otlptracegrpc.New(ctx, expOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create OTLP exporter: %w", err)
+		}
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 	}
-	if opts.ExporterConn != nil {
-		// WithGRPCConn takes precedence over endpoint/credential options, so
-		// WithInsecure above is inert on this path.
-		expOpts = append(expOpts, otlptracegrpc.WithGRPCConn(opts.ExporterConn))
-	}
-	exporter, err := otlptracegrpc.New(ctx, expOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create OTLP exporter: %w", err)
-	}
-	tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	slog.InfoContext(ctx, "Tracing initialized", slog.String("sampler", opts.Sampling.Sampler().Description()))
+	slog.InfoContext(ctx, "Tracing initialized",
+		slog.String("sampler", opts.Sampling.Sampler().Description()),
+		slog.Bool("export", export))
 	return tp, nil
 }
 
-const metricsExporterEnv = "OTEL_METRICS_EXPORTER"
+const (
+	metricsExporterEnv = "OTEL_METRICS_EXPORTER"
+	tracesExporterEnv  = "OTEL_TRACES_EXPORTER"
+)
 
 // metricsPushEnabled applies OTEL_METRICS_EXPORTER with the shared exporter
 // rules: the OTLP reader is installed while otlp is selected, as it is when the
@@ -208,6 +219,13 @@ func metricsPushEnabled(ctx context.Context, pullServed bool) bool {
 		known = append(known, exporterPrometheus)
 	}
 	return resolveExportersEnv(ctx, metricsExporterEnv, known, Exporters{ExporterOTLP: true}).Has(ExporterOTLP)
+}
+
+// tracesPushEnabled applies OTEL_TRACES_EXPORTER with the shared exporter
+// rules: the OTLP span exporter is installed while otlp, the default, is
+// selected.
+func tracesPushEnabled(ctx context.Context) bool {
+	return resolveExportersEnv(ctx, tracesExporterEnv, []string{ExporterOTLP}, Exporters{ExporterOTLP: true}).Has(ExporterOTLP)
 }
 
 // InitMetrics registers a global MeterProvider with both a Prometheus
