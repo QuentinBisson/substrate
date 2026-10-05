@@ -346,19 +346,41 @@ func gatheredNames(t *testing.T, reg prometheus.Gatherer) map[string]bool {
 }
 
 func TestMetricsPushEnabled(t *testing.T) {
-	for value, wantPush := range map[string]bool{"": true, "otlp": true, " OTLP ": true, "none": false, " None ": false, "prometheus": true} {
-		var buf bytes.Buffer
-		prev := slog.Default()
-		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-		t.Setenv(metricsExporterEnv, value)
-		push := metricsPushEnabled(t.Context())
-		slog.SetDefault(prev)
+	type want struct{ push, warn bool }
+	tests := []struct {
+		value      string
+		pullServed want
+		pushOnly   want
+	}{
+		{"", want{true, false}, want{true, false}},
+		{"otlp", want{true, false}, want{true, false}},
+		{" OTLP ", want{true, false}, want{true, false}},
+		{"none", want{false, false}, want{false, false}},
+		{" None ", want{false, false}, want{false, false}},
+		{"prometheus", want{false, false}, want{true, true}},
+		{" Prometheus ", want{false, false}, want{true, true}},
+		{"console", want{true, true}, want{true, true}},
+		{"otlp,prometheus", want{true, false}, want{true, true}},
+		{"prometheus, otlp", want{true, false}, want{true, true}},
+		{"prometheus,console", want{false, true}, want{true, true}},
+		{"none,otlp", want{true, true}, want{true, true}},
+		{"none,prometheus", want{true, true}, want{false, true}},
+	}
+	for _, tt := range tests {
+		for pullServed, w := range map[bool]want{true: tt.pullServed, false: tt.pushOnly} {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Setenv(metricsExporterEnv, tt.value)
+			push := metricsPushEnabled(t.Context(), pullServed)
+			slog.SetDefault(prev)
 
-		if push != wantPush {
-			t.Errorf("%s=%q: push = %t, want %t", metricsExporterEnv, value, push, wantPush)
-		}
-		if warned, wantWarn := strings.Contains(buf.String(), "level=WARN"), value == "prometheus"; warned != wantWarn {
-			t.Errorf("%s=%q: warned = %t, want %t:\n%s", metricsExporterEnv, value, warned, wantWarn, buf.String())
+			if push != w.push {
+				t.Errorf("%s=%q, pullServed %t: push = %t, want %t", metricsExporterEnv, tt.value, pullServed, push, w.push)
+			}
+			if warned := strings.Contains(buf.String(), "level=WARN"); warned != w.warn {
+				t.Errorf("%s=%q, pullServed %t: warned = %t, want %t:\n%s", metricsExporterEnv, tt.value, pullServed, warned, w.warn, buf.String())
+			}
 		}
 	}
 }
