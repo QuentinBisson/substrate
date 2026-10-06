@@ -66,6 +66,13 @@ atelet:
 ateApi:
   extraArgs: []
 
+# Kubernetes Secret provider and AGW HTTP/HTTPS credential injection.
+# Includes get-only Secret RBAC. HTTPS requires egress-mitm-ca-pool and actor trust.
+credentialProvider:
+  namespacePolicies: []
+  # - atespace: team-a
+  #   allowedNamespaces: [team-a-secrets]
+
 # Name of a ConfigMap in the release namespace that supplies per-environment
 # overrides for ate-api-server (ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING, ...).
 # Mounted via envFrom with optional=true. Created by the chart from these values.
