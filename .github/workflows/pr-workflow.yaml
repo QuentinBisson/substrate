@@ -121,34 +121,17 @@ jobs:
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
-  # The envoy entry reports the required e2e-test check.
   e2e-test:
-    name: ${{ matrix.dataplane == 'envoy' && 'e2e-test' || format('e2e-test ({0})', matrix.dataplane) }}
+    name: e2e-test
     runs-on: ubuntu-latest
     # Cluster bring-up, image builds and two sequential lanes; generous, but far
     # short of the six-hour platform default a hung lane would otherwise consume.
     timeout-minutes: 120
-    continue-on-error: ${{ matrix.experimental }} # TODO: Make AgentGateway required once tests show stability
     strategy:
       fail-fast: false
       matrix:
-        # AgentGateway runs pre-submit only for release-* branches. Everywhere
-        # else it runs post-merge (push to main) and on the weekly schedule.
-        include: >-
-          ${{ fromJSON(
-            (
-              (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-              || startsWith(github.base_ref, 'release-')
-              || startsWith(github.event.merge_group.base_ref, 'refs/heads/release-')
-            )
-            && '[
-              {"dataplane": "envoy", "experimental": false},
-              {"dataplane": "agentgateway", "experimental": true}
-            ]'
-            || '[
-              {"dataplane": "envoy", "experimental": false}
-            ]'
-          ) }}
+        include:
+        - dataplane: agentgateway
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       # The installer requires a credential provider selection, and deploys the
@@ -226,7 +209,7 @@ jobs:
     - name: Install Agent Substrate (${{ matrix.dataplane }})
       # The dataplane selection applies to both the ingress router and egress
       # gateway.
-      run: hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=${{ matrix.dataplane }}
+      run: hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=${{ matrix.dataplane }} --rollout-timeout=300s
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
@@ -236,11 +219,8 @@ jobs:
       run: hack/install-ate-kind.sh --setup-csi=nfs
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and deploys the
-      # counter-microvm demo onto the control plane installed above. The demo
-      # redeploys the control plane, so retain the selected dataplane.
-      env:
-        ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
-      run: hack/run-microvm-demo-kind.sh
+      # counter-microvm demo onto the control plane installed above.
+      run: hack/run-microvm-demo-kind.sh --skip-control-plane
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Deploy egress demos
@@ -277,7 +257,7 @@ jobs:
     - name: Save Go build cache
       # Main only, so PRs restore the latest main build rather than each
       # storing its own copy.
-      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' }}
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |

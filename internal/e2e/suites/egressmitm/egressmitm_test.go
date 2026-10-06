@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -168,11 +169,15 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			denied := probeFetch(t, ctx, rc, id, tc.origin, "bundle")
+			if os.Getenv(e2e.AtenetDataplaneEnv) == "agentgateway" {
+				if denied.Error != "" || denied.Status != "403" {
+					t.Errorf("fetch of %s: error %q, status %s, want HTTP 403", tc.origin, denied.Error, denied.Status)
+				}
+				return
+			}
 			switch {
-			case denied.Status == "403" && denied.Error == "":
-				// An explicit denial after completing TLS with the actor.
 			case denied.Error == "":
-				t.Errorf("fetch of %s returned status %s, want 403 or a connection closed at the ClientHello", tc.origin, denied.Status)
+				t.Errorf("fetch of %s returned status %s, want a connection closed at the ClientHello", tc.origin, denied.Status)
 			case strings.Contains(denied.Error, "certificate") || strings.Contains(denied.Error, "x509"):
 				t.Errorf("fetch of %s failed certificate verification instead of returning a policy denial: %s", tc.origin, denied.Error)
 			case denied.Status != "":
