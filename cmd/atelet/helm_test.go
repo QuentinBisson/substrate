@@ -29,23 +29,36 @@ func TestHelmImageCredentialProvider(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
+	const providerConfig = `apiVersion: kubelet.config.k8s.io/v1
+kind: CredentialProviderConfig
+providers: []`
 	for _, tc := range []struct {
-		name, config, binDir string
-		wantError            bool
+		name, config, configYAML, binDir string
+		wantError                        string
 	}{
 		{name: "public registries"},
 		{name: "node provider", config: "/etc/srv/kubernetes/cri_auth_config.yaml", binDir: "/home/kubernetes/bin"},
-		{name: "missing bin directory", config: "/etc/provider.yaml", wantError: true},
-		{name: "missing config", binDir: "/opt/providers", wantError: true},
+		{name: "chart provided config", configYAML: providerConfig, binDir: "/home/kubernetes/bin"},
+		{name: "missing bin directory", config: "/etc/provider.yaml", wantError: "must be set together"},
+		{name: "chart provided config without bin directory", configYAML: providerConfig, wantError: "must be set together"},
+		{name: "missing config", binDir: "/opt/providers", wantError: "must be set together"},
+		{
+			name:       "both config sources",
+			config:     "/etc/provider.yaml",
+			configYAML: providerConfig,
+			binDir:     "/opt/providers",
+			wantError:  "set only one of",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := exec.CommandContext(t.Context(), "helm", "template", "substrate", "../../charts/substrate",
 				"--show-only", "templates/atelet.yaml",
 				"--set-string", "atelet.imageCredentialProviderConfig="+tc.config,
+				"--set-string", "atelet.imageCredentialProviderConfigYAML="+tc.configYAML,
 				"--set-string", "atelet.imageCredentialProviderBinDir="+tc.binDir).CombinedOutput()
-			if tc.wantError {
-				if err == nil || !strings.Contains(string(out), "must be set together") {
-					t.Fatalf("render incomplete provider config: %v\n%s", err, out)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(string(out), tc.wantError) {
+					t.Fatalf("render rejected provider config with %q: %v\n%s", tc.wantError, err, out)
 				}
 				return
 			}
@@ -53,6 +66,7 @@ func TestHelmImageCredentialProvider(t *testing.T) {
 				t.Fatalf("render: %v\n%s", err, out)
 			}
 			var pod *corev1.PodSpec
+			var configMap *corev1.ConfigMap
 			for _, doc := range strings.Split(string(out), "\n---\n") {
 				var ds appsv1.DaemonSet
 				if err := yaml.Unmarshal([]byte(doc), &ds); err != nil {
@@ -60,6 +74,24 @@ func TestHelmImageCredentialProvider(t *testing.T) {
 				}
 				if ds.Kind == "DaemonSet" {
 					pod = &ds.Spec.Template.Spec
+				}
+				var cm corev1.ConfigMap
+				if err := yaml.Unmarshal([]byte(doc), &cm); err != nil {
+					t.Fatal(err)
+				}
+				if cm.Kind == "ConfigMap" {
+					configMap = &cm
+				}
+			}
+			if (configMap != nil) != (tc.configYAML != "") {
+				t.Fatalf("ConfigMap presence does not match provider configuration: %v", configMap)
+			}
+			if configMap != nil {
+				if got := strings.TrimRight(configMap.Data["config.yaml"], "\n"); got != tc.configYAML {
+					t.Errorf("ConfigMap carries %q, want the configured provider config", got)
+				}
+				if configMap.Name != "atelet-image-credential-provider" {
+					t.Errorf("ConfigMap is named %q", configMap.Name)
 				}
 			}
 			if pod == nil || len(pod.Containers) != 1 {
@@ -75,7 +107,7 @@ func TestHelmImageCredentialProvider(t *testing.T) {
 				{"image-credential-provider-config", "--image-credential-provider-config", "/run/image-credential-provider/config.yaml", tc.config},
 				{"image-credential-provider-bin", "--image-credential-provider-bin-dir", "/run/image-credential-provider/bin", tc.binDir},
 			} {
-				enabled := tc.config != ""
+				enabled := tc.config != "" || tc.configYAML != ""
 				if slices.Contains(container.Args, binding.flag+"="+binding.mount) != enabled {
 					t.Errorf("%s flag does not match provider configuration", binding.flag)
 				}
@@ -87,8 +119,16 @@ func TestHelmImageCredentialProvider(t *testing.T) {
 				if enabled {
 					mount := container.VolumeMounts[mountIndex]
 					volume := pod.Volumes[volumeIndex]
-					if mount.MountPath != binding.mount || !mount.ReadOnly || volume.HostPath == nil || volume.HostPath.Path != binding.host {
-						t.Errorf("%s must mount the configured host path read-only at the flag's path", binding.name)
+					if mount.MountPath != binding.mount || !mount.ReadOnly {
+						t.Errorf("%s must mount read-only at the flag's path", binding.name)
+					}
+					// An empty host path means the chart supplied the config itself.
+					if binding.host == "" {
+						if volume.ConfigMap == nil || configMap == nil || volume.ConfigMap.Name != configMap.Name || mount.SubPath != "config.yaml" {
+							t.Errorf("%s must project the chart's ConfigMap onto the flag's path", binding.name)
+						}
+					} else if volume.HostPath == nil || volume.HostPath.Path != binding.host || mount.SubPath != "" {
+						t.Errorf("%s must mount the configured host path at the flag's path", binding.name)
 					}
 				}
 			}
