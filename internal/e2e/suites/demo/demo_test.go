@@ -42,6 +42,7 @@ import (
 const demoAtespace = "demo"
 
 func TestActorLifecycle(t *testing.T) {
+	t.Parallel()
 	// Create namespace
 	nsObj := e2e.CreateNamespace(t)
 
@@ -95,6 +96,7 @@ func TestActorLifecycle(t *testing.T) {
 }
 
 func TestActorSnapshotLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
@@ -214,6 +216,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 }
 
 func TestDurableDirLifecycle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		tc   actorLifecycleTestCase
@@ -312,6 +315,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 // micro-VM runtime supports more than one — gVisor templates are still capped at
 // one by the ActorTemplate CEL rules, so the template would be rejected there.
 func TestMultipleDurableDirLifecycle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		tc   actorLifecycleTestCase
@@ -354,6 +358,7 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 }
 
 func TestExternalVolumeLifecycle(t *testing.T) {
+	t.Parallel()
 
 	tests := []struct {
 		name string
@@ -381,6 +386,7 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 }
 
 func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
@@ -443,6 +449,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 }
 
 func TestExternalVolume_NodeMigration(t *testing.T) {
+	t.Parallel()
 	if e2e.IsMicroVM() {
 		t.Skip("Skipping TestExternalVolume_NodeMigration for microVM environment")
 	}
@@ -1510,6 +1517,7 @@ func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path s
 }
 
 func TestWorkerPodDeletion(t *testing.T) {
+	t.Parallel()
 	// Create namespace
 	nsObj := e2e.CreateNamespace(t)
 
@@ -1635,6 +1643,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 }
 
 func TestRevertCrashedActor(t *testing.T) {
+	t.Parallel()
 	nsObj := e2e.CreateNamespace(t)
 	ctx := context.Background()
 	clients := e2e.GetClients()

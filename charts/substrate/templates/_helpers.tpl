@@ -115,8 +115,8 @@ Usage:
 {{- range $signal := list "traces" "metrics" "logs" }}
 {{- $cfg := index $otel $signal }}
 {{- if not $cfg.enabled }}
-{{- /* "none" is the SDK's own exporter name for "export nothing"; leaving the
-       endpoint unset would fall back to the SDK default of localhost:4317. */}}
+{{- /* Request no OTLP export with the SDK exporter name "none".
+       Actor events still go to stdout. */}}
 - name: OTEL_{{ upper $signal }}_EXPORTER
   value: none
 {{- else if $cfg.endpoint }}
@@ -125,9 +125,8 @@ Usage:
 {{- end }}
 {{- end }}
 {{- if include "substrate.otel.signalEndpoint" (list "logs" .) }}
-{{- /* Only logs need turning on: serverboot defaults the component to none, so
-       an enabled signal exports nothing without this. Traces and metrics always
-       export, so they need no such branch -- keep this out of the range above.
+{{- /* Only logs need turning on: serverboot defaults actor events to stdout.
+       Traces and metrics default to OTLP, so they need no such branch.
        Gated on an endpoint, since otlp without one retries localhost:4317. */}}
 - name: OTEL_LOGS_EXPORTER
   value: otlp

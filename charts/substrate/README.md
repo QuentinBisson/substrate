@@ -42,10 +42,10 @@ See `values.yaml` for the full set; the important keys:
 |-----|---------|-------|
 | `postgres.enabled` | `true` | Deploy the bundled PostgreSQL instance |
 | `postgres.readWriteConnectionString` | `""` (in-cluster) | Runtime connection; required for external PostgreSQL |
-| `postgres.ownerConnectionString` | `""` (read/write connection) | Connection for migrations and partition maintenance |
-| `postgres.readWriteRole` | `postgres` | Role assumed by runtime connections |
-| `postgres.ownerRole` | `postgres` | Role assumed by migration and partition maintenance connections |
-| `postgres.schema` | `public` | Store the Substrate tables in this PostgreSQL schema |
+| `postgres.ownerConnectionString` | `""` (bundled owner login or external read/write connection) | Connection for migrations and partition maintenance |
+| `postgres.readWriteRole` | `substrate_readwrite` | Role assumed by runtime connections |
+| `postgres.ownerRole` | `substrate_owner` | Role assumed by migration and partition maintenance connections |
+| `postgres.schema` | `substrate` | Store the Substrate tables in this PostgreSQL schema |
 | `postgres.storageSize` | `1Gi` | In-cluster PostgreSQL PVC size |
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true` |
@@ -57,7 +57,13 @@ See `values.yaml` for the full set; the important keys:
 | `otel.traces.enabled` | `true` | Set to `false` to export no traces from the router; the Go components do not honor this yet |
 | `otel.traces.endpoint` | `""` | OTLP endpoint for traces, overriding `otel.endpoint` |
 | `otel.traces.samplingRatio` | `0.01` | Fraction of parentless requests that start a trace, applied to the Go components and the router |
-| `otel.metrics.enabled` | `true` | Sets the OTLP metrics exporter to `none`; the Go components do not honor this yet |
+| `otel.metrics.enabled` | `true` | Set to `false` to disable OTLP metrics push; Prometheus scraping remains available |
 | `otel.metrics.endpoint` | `""` | OTLP endpoint for metrics, overriding `otel.endpoint` |
-| `otel.logs.enabled` | `true` | Set to `false` to export no logs. Gates both OTLP log sources: ateapi's actor lifecycle events and the router access log |
+| `otel.logs.enabled` | `true` | Enable OTLP actor events from ateapi and the ateoms, plus the router access log. Actor events go to stdout when OTLP logs are disabled |
 | `otel.logs.endpoint` | `""` | OTLP endpoint for logs, overriding `otel.endpoint` |
+
+Bundled PostgreSQL uses the fixed development owner and runtime logins from
+`pkg/postgressetup`. Its startup hook applies the shared setup SQL through the
+local socket before accepting application work. Application connections require
+a password and a pod identity certificate; administrator access stays local to
+the PostgreSQL pod. External PostgreSQL identities remain operator-managed.
