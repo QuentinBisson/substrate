@@ -359,37 +359,28 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	prewarmMaxJitter = 0
 	t.Cleanup(func() { nodepath.StaticFilesDir, prewarmMaxJitter = origDir, origJitter })
 
-	host := imageVolumeTestRegistry(t)
-	pauseRef := host + "/pause:3.10"
-	pushPauseImage(t, pauseRef)
-
 	content := []byte("runsc binary bytes")
 	sha := fmt.Sprintf("%x", sha256.Sum256(content))
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", sha)
-	cfg.Spec.PauseImage = pauseRef
+	cfg.Spec.PauseImage = ""
 
 	ctx := t.Context()
 	client := fake.NewSimpleClientset(cfg)
 	factory := externalversions.NewSharedInformerFactory(client, 0)
 	informer := factory.Api().V1alpha1().SandboxConfigs().Informer()
 
-	store, err := imagecache.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("imagecache.New: %v", err)
-	}
 	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
 	// Handler first, informer start second, mirroring main: atelet startup
 	// must never wait on this informer's sync, and the initial List replays
 	// the pre-existing config into the handler as an Add.
-	p, err := startSandboxAssetPrewarm(ctx, informer, herder, store, false)
+	p, err := startSandboxAssetPrewarm(ctx, informer, herder, nil, false)
 	if err != nil {
 		t.Fatalf("startSandboxAssetPrewarm: %v", err)
 	}
 	// The worker reads the patched globals above. t.Context() is canceled
 	// before cleanups run, and cleanups run last-registered-first, so this
 	// joins the worker before the earlier cleanup restores the globals —
-	// without it the restore races the worker's tail (pause-image pull
-	// after the asset lands) and trips the race detector.
+	// without it the restore can race the worker's tail.
 	t.Cleanup(p.wait)
 	stopCh := make(chan struct{})
 	defer close(stopCh)

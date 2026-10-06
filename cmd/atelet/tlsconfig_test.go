@@ -49,8 +49,14 @@ func TestAteletServerTLSConfigReloadsCACertsWithoutRestart(t *testing.T) {
 		t.Fatalf("GetConfigForClient() first call error = %v", err)
 	}
 
-	if err := os.WriteFile(path, testCertPEM(t), 0o600); err != nil {
+	// Replace the file like a projected-volume rotation, even when writes
+	// share a filesystem timestamp.
+	rotatedPath := path + ".rotated"
+	if err := os.WriteFile(rotatedPath, testCertPEM(t), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Rename(rotatedPath, path); err != nil {
+		t.Fatalf("Rename() error = %v", err)
 	}
 
 	after, err := cfg.GetConfigForClient(nil)
