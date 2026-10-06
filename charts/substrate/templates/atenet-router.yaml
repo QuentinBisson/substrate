@@ -162,6 +162,7 @@ spec:
         prometheus.io/port: "15020"
     spec:
       serviceAccountName: {{ include "substrate.fullname" (list "atenet-router" .) }}
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       containers:
       - name: atenet-router
         image: {{ include "substrate.componentImage" (list "atenet" .) }}
@@ -210,7 +211,7 @@ spec:
         - { name: servicedns-ca, mountPath: /run/servicedns-ca, readOnly: true }
         - { name: podidentity,   mountPath: /run/podidentity.podcert.ate.dev, readOnly: true }
       - name: agentgateway
-        image: {{ .Values.images.agentgateway }}
+        image: {{ include "substrate.thirdPartyImage" (list .Values.images.agentgateway .) }}
         args:
         - "-f"
         - "/etc/agentgateway/config.yaml"

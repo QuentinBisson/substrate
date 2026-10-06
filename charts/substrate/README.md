@@ -44,6 +44,7 @@ See `values.yaml` for the full set; the important keys:
 | `postgres.storageSize` | `1Gi` | In-cluster PostgreSQL PVC size |
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true` |
-| `atelet.gcpAuthForImagePulls` | `false` | Enable only when using GCP registry auth |
+| `atelet.imageCredentialProviderConfig` | `""` | Host path to the kubelet credential provider config; set together with the bin directory |
+| `atelet.imageCredentialProviderBinDir` | `""` | Host path to the kubelet credential provider binaries; both paths are mounted read-only |
 | `ateApi.extraArgs` | `[]` | Additional command-line arguments appended to the ateapi defaults |
 | `otel.endpoint` | `""` | Set to an OTLP endpoint to export traces/metrics |

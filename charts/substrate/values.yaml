@@ -53,7 +53,11 @@ rustfs:
 # extraArgs / extraEnv are appended verbatim for installer-specific knobs
 # (e.g. registry replacement for kind).
 atelet:
-  gcpAuthForImagePulls: false
+  # Host paths for the node's kubelet credential provider. Set both to enable
+  # private registry authentication (GKE: /etc/srv/kubernetes/cri_auth_config.yaml
+  # and /home/kubernetes/bin). Leave empty on nodes without a provider, like Kind.
+  imageCredentialProviderConfig: ""
+  imageCredentialProviderBinDir: ""
   storageBackend: s3
   extraArgs: []
   extraEnv: []
@@ -70,8 +74,33 @@ ateApiServerEnvVarsConfigMap: ate-api-server-envvars
 otel:
   endpoint: ""
 
+# Values under `global` are visible to this chart and to every subchart. A parent
+# chart or an operator sets one value here instead of one value per chart.
+global:
+  # -- Mirror registry that overrides where every image is pulled from. This is
+  # the air-gap knob. It wins over image.registry for component images. Each
+  # `images.*` reference has its registry segment replaced. Repository paths are
+  # preserved, so a mirror only has to copy images under their existing paths.
+  # For control without the override, leave this unset and set image.registry.
+  imageRegistry: ""
+  # -- Pull secrets merged (union) into each pod's own imagePullSecrets list.
+  imagePullSecrets: []
+  # -- Fallback imagePullPolicy where a container does not set one.
+  imagePullPolicy: ""
+
+# Pull secrets for every pod this chart renders. Merged with global.imagePullSecrets.
+imagePullSecrets: []
+
 image:
-  registry: ghcr.io/kagent-dev/substrate
+  # Registry host for the component images, and nothing else. To change
+  # environments, change only this value or global.imageRegistry, which overrides
+  # it. A path inside `registry` fails the render, and the error names this
+  # split.
+  registry: ghcr.io
+  # Image path prefix under the registry, ahead of each component name. The path
+  # is identical on every registry that serves the images. A mirror copies the
+  # images under this same path.
+  repository: kagent-dev/substrate
   tag: ""
 
 images:
