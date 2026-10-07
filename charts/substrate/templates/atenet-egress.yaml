@@ -177,54 +177,6 @@ spec:
         - name: actor-id-ca-certs
           mountPath: /run/actor-id-ca-certs
           readOnly: true
-      - name: ext-proc
-        image: {{ include "substrate.componentImage" (list "atenet" .) }}
-        args:
-        - router
-        - --mode=egress
-        - --namespace={{ .Release.Namespace }}
-        - --port-extproc=50051
-        - --extproc-address=127.0.0.1
-        - --ateapi-address={{ include "substrate.ateApi.endpoint" . }}
-        - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
-        - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
-        - --actor-identity-ca-file=/run/actor-id-ca-certs/ca.crt
-        - --otlp-collector-address=
-        - --envoy-admin-address=localhost:15000
-        - --atenet-dataplane=agentgateway
-        env:
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        ports:
-        - name: extproc
-          containerPort: 50051
-        - name: metrics
-          containerPort: 9090
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 9090
-          initialDelaySeconds: 5
-          periodSeconds: 2
-          failureThreshold: 3
-        volumeMounts:
-        - name: servicedns
-          mountPath: /run/servicedns.podcert.ate.dev
-          readOnly: true
-        - name: podidentity
-          mountPath: /run/podidentity.podcert.ate.dev
-          readOnly: true
-        - name: actor-id-ca-certs
-          mountPath: /run/actor-id-ca-certs
-          readOnly: true
-        - name: drain-signal
-          mountPath: /var/run/atenet
       volumes:
       - name: egress-mitm
         secret:
@@ -237,8 +189,6 @@ spec:
       - name: config
         configMap:
           name: {{ include "substrate.fullname" (list "atenet-egress-agentgateway-config" .) }}
-      - name: drain-signal
-        emptyDir: {}
       - name: servicedns
         projected:
           sources:
