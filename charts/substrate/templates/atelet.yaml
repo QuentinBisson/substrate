@@ -14,8 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
-{{- if ne (empty .Values.atelet.imageCredentialProviderConfig) (empty .Values.atelet.imageCredentialProviderBinDir) }}
-{{- fail "atelet.imageCredentialProviderConfig and atelet.imageCredentialProviderBinDir must be set together" }}
+{{- if and .Values.atelet.imageCredentialProviderConfig .Values.atelet.imageCredentialProviderConfigYAML }}
+{{- fail "set only one of atelet.imageCredentialProviderConfig and atelet.imageCredentialProviderConfigYAML" }}
+{{- end }}
+{{- $credentialProviderConfig := or .Values.atelet.imageCredentialProviderConfig .Values.atelet.imageCredentialProviderConfigYAML }}
+{{- if ne (empty $credentialProviderConfig) (empty .Values.atelet.imageCredentialProviderBinDir) }}
+{{- fail "atelet.imageCredentialProviderConfig (or atelet.imageCredentialProviderConfigYAML) and atelet.imageCredentialProviderBinDir must be set together" }}
 {{- end }}
 
 # atelet
@@ -24,6 +28,17 @@ kind: ServiceAccount
 metadata:
   name: {{ include "substrate.fullname" (list "atelet" .) }}
   namespace: {{ .Release.Namespace }}
+{{- if .Values.atelet.imageCredentialProviderConfigYAML }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet-image-credential-provider" .) }}
+  namespace: {{ .Release.Namespace }}
+data:
+  config.yaml: |
+    {{- .Values.atelet.imageCredentialProviderConfigYAML | nindent 4 }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -124,7 +139,7 @@ spec:
       - name: atelet
         image: {{ include "substrate.componentImage" (list "atelet" .) }}
         args:
-{{- if .Values.atelet.imageCredentialProviderConfig }}
+{{- if $credentialProviderConfig }}
         - --image-credential-provider-config=/run/image-credential-provider/config.yaml
         - --image-credential-provider-bin-dir=/run/image-credential-provider/bin
 {{- end }}
@@ -209,12 +224,15 @@ spec:
         - name: host-dev
           mountPath: /host/dev
           readOnly: true
-{{- if .Values.atelet.imageCredentialProviderConfig }}
+{{- if $credentialProviderConfig }}
         - name: image-credential-provider-bin
           mountPath: /run/image-credential-provider/bin
           readOnly: true
         - name: image-credential-provider-config
           mountPath: /run/image-credential-provider/config.yaml
+{{- if .Values.atelet.imageCredentialProviderConfigYAML }}
+          subPath: config.yaml
+{{- end }}
           readOnly: true
 {{- end }}
       volumes:
@@ -234,15 +252,20 @@ spec:
         hostPath:
           path: /dev
           type: Directory
-{{- if .Values.atelet.imageCredentialProviderConfig }}
+{{- if $credentialProviderConfig }}
       - name: image-credential-provider-bin
         hostPath:
           path: {{ .Values.atelet.imageCredentialProviderBinDir | quote }}
           type: Directory
       - name: image-credential-provider-config
+{{- if .Values.atelet.imageCredentialProviderConfigYAML }}
+        configMap:
+          name: {{ include "substrate.fullname" (list "atelet-image-credential-provider" .) }}
+{{- else }}
         hostPath:
           path: {{ .Values.atelet.imageCredentialProviderConfig | quote }}
           type: File
+{{- end }}
 {{- end }}
       - name: podidentity
         projected:

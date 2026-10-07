@@ -50,6 +50,7 @@ See `values.yaml` for the full set; the important keys:
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true` |
 | `atelet.imageCredentialProviderConfig` | `""` | Host path to the kubelet credential provider config; set together with the bin directory |
+| `atelet.imageCredentialProviderConfigYAML` | `""` | Credential provider config as text, rendered into a ConfigMap, for nodes where that file cannot be authored or must differ from the kubelet's; mutually exclusive with the host path |
 | `atelet.imageCredentialProviderBinDir` | `""` | Host path to the kubelet credential provider binaries; both paths are mounted read-only |
 | `credentialProvider.namespacePolicies` | `[]` | Default-deny atespace-to-namespace grants; the chart includes get-only Secret RBAC for the provider |
 | `ateApi.extraArgs` | `[]` | Additional command-line arguments appended to the ateapi defaults |

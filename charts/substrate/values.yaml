@@ -58,6 +58,11 @@ atelet:
   # private registry authentication (GKE: /etc/srv/kubernetes/cri_auth_config.yaml
   # and /home/kubernetes/bin). Leave empty on nodes without a provider, like Kind.
   imageCredentialProviderConfig: ""
+  # The config itself, rendered into a ConfigMap, for nodes whose image owns
+  # the kubelet's copy (EKS) and for a provider environment that has to differ
+  # from the kubelet's. Set this or imageCredentialProviderConfig, not both;
+  # either one still needs the bin directory.
+  imageCredentialProviderConfigYAML: ""
   imageCredentialProviderBinDir: ""
   storageBackend: s3
   extraArgs: []
