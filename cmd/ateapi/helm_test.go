@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 	"github.com/spf13/pflag"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -32,7 +33,8 @@ func TestHelmPostgresConfiguration(t *testing.T) {
 		wantReadWrite, wantOwner, wantReadWriteRole, wantOwnerRole string
 		wantError                                                  bool
 	}{
-		{name: "bundled", wantReadWriteRole: "postgres", wantOwnerRole: "postgres"},
+		{name: "bundled", wantReadWriteRole: postgressetup.ReadWriteRole, wantOwnerRole: postgressetup.OwnerRole},
+		{name: "bundled custom roles", values: []string{"postgres.readWriteRole=runtime", "postgres.ownerRole=owner", "postgres.schema=custom_schema"}, wantReadWriteRole: "runtime", wantOwnerRole: "owner"},
 		{name: "external", values: []string{"postgres.enabled=false", "postgres.readWriteConnectionString=postgresql://runtime@db/atepg", "postgres.ownerConnectionString=postgresql://owner@db/atepg", "postgres.readWriteRole=runtime", "postgres.ownerRole=owner"}, wantReadWrite: "postgresql://runtime@db/atepg", wantOwner: "postgresql://owner@db/atepg", wantReadWriteRole: "runtime", wantOwnerRole: "owner"},
 		{name: "shared login", values: []string{"postgres.enabled=false", "postgres.readWriteConnectionString=postgresql://login@db/atepg", "postgres.readWriteRole=runtime", "postgres.ownerRole=owner"}, wantReadWrite: "postgresql://login@db/atepg", wantOwner: "postgresql://login@db/atepg", wantReadWriteRole: "runtime", wantOwnerRole: "owner"},
 		{name: "missing external connection", values: []string{"postgres.enabled=false"}, wantError: true},
@@ -53,6 +55,8 @@ func TestHelmPostgresConfiguration(t *testing.T) {
 				t.Fatalf("render: %v\n%s", err, out)
 			}
 			var env map[string]string
+			var postgresConfig map[string]string
+			var postgres *corev1.Container
 			var container *corev1.Container
 			for _, doc := range strings.Split(string(out), "\n---\n") {
 				var cm corev1.ConfigMap
@@ -61,6 +65,20 @@ func TestHelmPostgresConfiguration(t *testing.T) {
 				}
 				if cm.Kind == "ConfigMap" && cm.Name == "ate-api-server-envvars" {
 					env = cm.Data
+				}
+				if cm.Kind == "ConfigMap" && cm.Name == "test-postgres-config" {
+					postgresConfig = cm.Data
+				}
+				if cm.Kind == "StatefulSet" && cm.Name == "test-postgres" {
+					var statefulSet appsv1.StatefulSet
+					if err := yaml.Unmarshal([]byte(doc), &statefulSet); err != nil {
+						t.Fatal(err)
+					}
+					for _, c := range statefulSet.Spec.Template.Spec.Containers {
+						if c.Name == "postgres" {
+							postgres = &c
+						}
+					}
 				}
 				if cm.Kind != "Deployment" {
 					continue
@@ -85,8 +103,38 @@ func TestHelmPostgresConfiguration(t *testing.T) {
 				}
 			}
 			if tc.wantReadWrite == "" {
-				tc.wantReadWrite = "postgresql://postgres@test-postgres.custom.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
-				tc.wantOwner = tc.wantReadWrite
+				const endpoint = "@test-postgres.custom.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
+				tc.wantReadWrite = "postgresql://" + postgressetup.ReadWriteUser + ":" + postgressetup.ReadWritePassword + endpoint
+				tc.wantOwner = "postgresql://" + postgressetup.OwnerUser + ":" + postgressetup.OwnerPassword + endpoint
+				if postgres == nil || postgresConfig == nil {
+					t.Fatal("missing bundled PostgreSQL setup")
+				}
+				if strings.TrimSpace(postgresConfig["setup.sql"]) != strings.TrimSpace(postgressetup.Script()) {
+					t.Error("chart PostgreSQL setup differs from the shared installer script")
+				}
+				for _, rule := range []string{
+					"hostssl all postgres all reject",
+					"hostssl atepg all all scram-sha-256 clientcert=verify-ca",
+				} {
+					if !strings.Contains(postgresConfig["pg_hba.conf"], rule) {
+						t.Errorf("missing PostgreSQL authentication rule %q", rule)
+					}
+				}
+				bootstrapEnv := map[string]string{}
+				for _, variable := range postgres.Env {
+					bootstrapEnv[variable.Name] = variable.Value
+				}
+				for bootstrap, api := range map[string]string{
+					"SUBSTRATE_SCHEMA":         "ATE_API_POSTGRES_SCHEMA",
+					"SUBSTRATE_OWNER_ROLE":     "ATE_API_POSTGRES_OWNER_ROLE",
+					"SUBSTRATE_READWRITE_ROLE": "ATE_API_POSTGRES_READ_WRITE_ROLE",
+				} {
+					if bootstrapEnv[bootstrap] == "" || bootstrapEnv[bootstrap] != env[api] {
+						t.Errorf("bootstrap %s = %q, API %s = %q", bootstrap, bootstrapEnv[bootstrap], api, env[api])
+					}
+				}
+			} else if postgres != nil || postgresConfig != nil {
+				t.Error("external PostgreSQL configuration deploys a bundled database")
 			}
 			for key, want := range map[string]string{
 				"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": tc.wantReadWrite,
