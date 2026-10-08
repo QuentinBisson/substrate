@@ -42,14 +42,15 @@ const UsernameAnnotation = "postgres.podcert.ate.dev/username"
 const CTBPrefix = "postgres.podcert.ate.dev:identity:"
 
 type Impl struct {
-	namespace string
-	pcrClient *podcertificate.Client
-	caPool    localca.Pool
+	namespace      string
+	serviceAccount string
+	pcrClient      *podcertificate.Client
+	caPool         localca.Pool
 }
 
-func NewImpl(namespace string, caPool localca.Pool, pcrClient *podcertificate.Client) *Impl {
+func NewImpl(namespace, serviceAccount string, caPool localca.Pool, pcrClient *podcertificate.Client) *Impl {
 	return &Impl{
-		namespace: namespace, pcrClient: pcrClient,
+		namespace: namespace, serviceAccount: serviceAccount, pcrClient: pcrClient,
 		caPool: caPool,
 	}
 }
@@ -101,8 +102,8 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	}
 	// kube-apiserver validates the request identity. Authorization is tied to
 	// the namespace and service account, not the user-supplied annotations.
-	if pcr.Namespace != h.namespace || pcr.Spec.ServiceAccountName != "ate-api-server" {
-		return h.deny(ctx, pcr, "UnauthorizedServiceAccount", fmt.Sprintf("only %s/ate-api-server may request PostgreSQL login certificates", h.namespace))
+	if pcr.Namespace != h.namespace || pcr.Spec.ServiceAccountName != h.serviceAccount {
+		return h.deny(ctx, pcr, "UnauthorizedServiceAccount", fmt.Sprintf("only %s/%s may request PostgreSQL login certificates", h.namespace, h.serviceAccount))
 	}
 	// Annotations are untrusted input; this service account may request only
 	// the two bundled application logins, never the administrator login.

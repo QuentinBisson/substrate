@@ -65,6 +65,15 @@ See `values.yaml` for the full set; the important keys:
 
 Bundled PostgreSQL uses the fixed development owner and runtime logins from
 `pkg/postgressetup`. Its startup hook applies the shared setup SQL through the
-local socket before accepting application work. Application connections require
-a password and a pod identity certificate; administrator access stays local to
-the PostgreSQL pod. External PostgreSQL identities remain operator-managed.
+local socket before accepting application work. Each application login uses its
+own projected certificate from `postgres.podcert.ate.dev/identity`, without a
+database password. Administrator access stays local to the PostgreSQL pod.
+External PostgreSQL identities remain operator-managed.
+
+Before upgrading an existing install, run
+`hack/install-ate-kind.sh --create-podcertificate-controller-cas` (or the
+corresponding `hack/install-ate.sh` command outside Kind) to create the new
+`postgres-ca-pool` Secret in `podcertificate-controller-system`. The chart wires
+the signer to the release namespace and API server service account. Upgrade the
+controller, API server, and database together; the database startup hook clears
+the old application passwords.

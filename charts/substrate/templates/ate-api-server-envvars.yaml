@@ -17,10 +17,14 @@ limitations under the License.
 {{- if and (not .Values.postgres.enabled) (empty .Values.postgres.readWriteConnectionString) }}
 {{- fail "postgres.readWriteConnectionString is required when postgres.enabled=false" }}
 {{- end }}
-{{- $readWriteDSN := .Values.postgres.readWriteConnectionString | default (printf "postgresql://substrate_readwrite_user:substrate-readwrite@%s.%s.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable" (include "substrate.fullname" (list "postgres" .)) .Release.Namespace) }}
-{{- $ownerDSN := .Values.postgres.ownerConnectionString | default $readWriteDSN }}
-{{- if and .Values.postgres.enabled (empty .Values.postgres.ownerConnectionString) }}
-{{- $ownerDSN = replace "substrate_readwrite_user:substrate-readwrite@" "substrate_owner_user:substrate-owner@" $readWriteDSN }}
+{{- $readWriteDSN := .Values.postgres.readWriteConnectionString }}
+{{- $ownerDSN := .Values.postgres.ownerConnectionString }}
+{{- if .Values.postgres.enabled }}
+{{- $endpoint := printf "%s.%s.svc:5432/atepg" (include "substrate.fullname" (list "postgres" .)) .Release.Namespace }}
+{{- $readWriteDSN = $readWriteDSN | default (printf "postgresql://substrate_readwrite_user@%s?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/postgres.podcert.ate.dev/substrate_readwrite_user.pem&sslkey=/run/postgres.podcert.ate.dev/substrate_readwrite_user.pem" $endpoint) }}
+{{- $ownerDSN = $ownerDSN | default (printf "postgresql://substrate_owner_user@%s?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/postgres.podcert.ate.dev/substrate_owner_user.pem&sslkey=/run/postgres.podcert.ate.dev/substrate_owner_user.pem" $endpoint) }}
+{{- else }}
+{{- $ownerDSN = $ownerDSN | default $readWriteDSN }}
 {{- end }}
 apiVersion: v1
 kind: ConfigMap

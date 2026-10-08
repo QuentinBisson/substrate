@@ -40,6 +40,7 @@ import (
 func TestMakeCert(t *testing.T) {
 	for _, tc := range []struct {
 		name                              string
+		serviceAccount                    string
 		namespace                         string
 		mutate                            func(*certsv1beta1.PodCertificateRequest)
 		wantDenied, wantError, failUpdate bool
@@ -61,6 +62,14 @@ func TestMakeCert(t *testing.T) {
 		{name: "wrong service account after relocation", namespace: "team-a-substrate", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Namespace = "team-a-substrate"
 			p.Spec.ServiceAccountName = "default"
+		}},
+		{name: "prefixed service account", serviceAccount: "test-ate-api-server", lifetime: 24 * time.Hour, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Spec.ServiceAccountName = "test-ate-api-server"
+		}},
+		{name: "default account denied with prefixed configuration", serviceAccount: "test-ate-api-server", wantDenied: true},
+		{name: "prefixed account denied in wrong namespace", serviceAccount: "test-ate-api-server", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Spec.ServiceAccountName = "test-ate-api-server"
+			p.Namespace = "other"
 		}},
 		{name: "missing username", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) { p.Spec.UnverifiedUserAnnotations = nil }},
 		{name: "administrator username", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
@@ -136,7 +145,11 @@ func TestMakeCert(t *testing.T) {
 			if namespace == "" {
 				namespace = installdefaults.SystemNamespace
 			}
-			impl := NewImpl(namespace, &localca.ConcretePool{CAs: []*localca.CA{ca}}, client)
+			serviceAccount := tc.serviceAccount
+			if serviceAccount == "" {
+				serviceAccount = "ate-api-server"
+			}
+			impl := NewImpl(namespace, serviceAccount, &localca.ConcretePool{CAs: []*localca.CA{ca}}, client)
 			err = impl.MakeCert(t.Context(), pcr)
 
 			if (err != nil) != tc.wantError {
@@ -207,7 +220,7 @@ func TestDesiredClusterTrustBundles(t *testing.T) {
 		}
 		pool.CAs = append(pool.CAs, ca)
 	}
-	impl := NewImpl(installdefaults.SystemNamespace, pool, nil)
+	impl := NewImpl(installdefaults.SystemNamespace, "ate-api-server", pool, nil)
 	bundles, err := impl.DesiredClusterTrustBundles()
 	if err != nil {
 		t.Fatal(err)

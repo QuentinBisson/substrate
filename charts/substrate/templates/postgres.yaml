@@ -33,7 +33,7 @@ data:
     ssl = on
     ssl_cert_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
     ssl_key_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
-    ssl_ca_file = '/run/podidentity.podcert.ate.dev/trust-bundle.pem'
+    ssl_ca_file = '/run/postgres.podcert.ate.dev/trust-bundle.pem'
     hba_file = '/etc/postgresql/pg_hba.conf'
   pg_hba.conf: |
     # Local socket access is limited to processes in this pod and is used by
@@ -42,8 +42,8 @@ data:
     local all all trust
     # Administrator access stays inside the PostgreSQL pod.
     hostssl all postgres all reject
-    # Applications require both a password and a pod-identity certificate.
-    hostssl atepg all all scram-sha-256 clientcert=verify-ca
+    # Client certificate CNs must match the requested database username.
+    hostssl atepg substrate_owner_user,substrate_readwrite_user all cert
   setup.sql: |
     BEGIN;
 {{ .Files.Get "files/postgres-setup.sql" | indent 4 }}
@@ -63,7 +63,7 @@ data:
     trap 'exit 0' TERM INT
 
     CERT=/run/servicedns.podcert.ate.dev/credential-bundle.pem
-    CA=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+    CA=/run/postgres.podcert.ate.dev/trust-bundle.pem
 
     # Comfortably inside the 30m headroom (notAfter - beginRefreshAt) that
     # cmd/podcertcontroller/internal/servicednssigner/servicednssigner.go
@@ -148,8 +148,8 @@ spec:
         - name: servicedns
           mountPath: /run/servicedns.podcert.ate.dev
           readOnly: true
-        - name: podidentity-ca
-          mountPath: /run/podidentity.podcert.ate.dev
+        - name: postgres-ca
+          mountPath: /run/postgres.podcert.ate.dev
           readOnly: true
         - name: socket
           mountPath: /var/run/postgresql
@@ -179,10 +179,10 @@ spec:
                   --set=substrate_schema="${SUBSTRATE_SCHEMA}" \
                   --set=substrate_owner_role="${SUBSTRATE_OWNER_ROLE}" \
                   --set=substrate_owner_user=substrate_owner_user \
-                  --set=substrate_owner_password=substrate-owner \
+                  --set=substrate_owner_password="" \
                   --set=substrate_readwrite_role="${SUBSTRATE_READWRITE_ROLE}" \
                   --set=substrate_readwrite_user=substrate_readwrite_user \
-                  --set=substrate_readwrite_password=substrate-readwrite \
+                  --set=substrate_readwrite_password="" \
                   --file=/etc/postgresql/setup.sql
         env:
         - name: POSTGRES_DB
@@ -224,8 +224,8 @@ spec:
         - name: servicedns
           mountPath: /run/servicedns.podcert.ate.dev
           readOnly: true
-        - name: podidentity-ca
-          mountPath: /run/podidentity.podcert.ate.dev
+        - name: postgres-ca
+          mountPath: /run/postgres.podcert.ate.dev
           readOnly: true
         - name: socket
           mountPath: /var/run/postgresql
@@ -257,11 +257,11 @@ spec:
       # this path, so nothing else has to know about it.
       - name: socket
         emptyDir: {}
-      - name: podidentity-ca
+      - name: postgres-ca
         projected:
           sources:
           - clusterTrustBundle:
-              signerName: podidentity.podcert.ate.dev/identity
+              signerName: postgres.podcert.ate.dev/identity
               labelSelector:
                 matchLabels:
                   podcert.ate.dev/canarying: live
