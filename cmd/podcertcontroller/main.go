@@ -97,6 +97,12 @@ var (
 		"Service account in postgres-client-namespace that may request PostgreSQL login certificates",
 	)
 
+	postgresClients = pflag.StringArray(
+		"postgres-client",
+		nil,
+		"Additional PostgreSQL certificate client in namespace/service-account=username[,username] form. May be repeated.",
+	)
+
 	workersPerSigner = pflag.Int(
 		"workers-per-signer",
 		1,
@@ -127,6 +133,16 @@ func main() {
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	slog.InfoContext(ctx, "podcertcontroller starting", slog.String("version", version.Version))
+
+	additionalPostgresClients := make([]postgressigner.Client, 0, len(*postgresClients))
+	for _, value := range *postgresClients {
+		client, err := postgressigner.ParseClient(value)
+		if err != nil {
+			slog.ErrorContext(ctx, "Invalid PostgreSQL client policy", slog.String("value", value), slog.Any("err", err))
+			os.Exit(1)
+		}
+		additionalPostgresClients = append(additionalPostgresClients, client)
+	}
 
 	var kconfig *rest.Config
 	var err error
@@ -205,7 +221,7 @@ func main() {
 		slog.ErrorContext(ctx, "Error loading PostgreSQL CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
-	postgresSignerController := signercontroller.New(clock.RealClock{}, postgressigner.NewImpl(*postgresClientNamespace, *postgresClientServiceAccount, postgresCAPool, pcrClient), hasher, pcrClient, trustBundles)
+	postgresSignerController := signercontroller.New(clock.RealClock{}, postgressigner.NewImpl(*postgresClientNamespace, *postgresClientServiceAccount, postgresCAPool, pcrClient, additionalPostgresClients...), hasher, pcrClient, trustBundles)
 	go postgresSignerController.Run(ctx, *workersPerSigner)
 	go pcrClient.Informer().Run(ctx.Done())
 	go serviceDNSSignerController.Run(ctx, *workersPerSigner)

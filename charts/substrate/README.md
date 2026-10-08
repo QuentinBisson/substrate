@@ -2,17 +2,29 @@
 
 Helm chart for installing Agent Substrate.
 
-The chart uses mTLS and PostgreSQL by default. It requires the
+The chart uses mTLS and requires a prepared PostgreSQL database. It requires the
 `ClusterTrustBundle`, `ClusterTrustBundleProjection`, and
 `PodCertificateRequest` feature gates plus the `certificates.k8s.io/v1beta1`
 API.
+
+Install the [certificate controller](../substrate-podcert/README.md) as a separate
+release before preparing PostgreSQL or installing this chart. One controller
+serves the cluster; the application chart does not deploy it.
 
 ```bash
 # CRDs
 helm upgrade --install substrate-crds ./charts/substrate-crds
 
-# Install Substrate
-helm upgrade --install substrate ./charts/substrate
+# Create CA pools, then install their certificate controller
+go run ./cmd/ate-setup create podcertificate-controller-cas
+helm upgrade --install substrate-podcert ./charts/substrate-podcert \
+  --namespace podcertificate-controller-system --create-namespace --wait
+
+# Install Substrate after creating the database identities and Secrets
+helm upgrade --install substrate ./charts/substrate \
+  --namespace ate-system --create-namespace \
+  --set postgres.readWriteConnectionStringSecretRef.name=substrate-postgres-readwrite \
+  --set postgres.ownerConnectionStringSecretRef.name=substrate-postgres-owner
 ```
 
 By default, component images are pulled from `ghcr.io/kagent-dev/substrate`
@@ -40,13 +52,12 @@ See `values.yaml` for the full set; the important keys:
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `postgres.enabled` | `true` | Deploy the bundled PostgreSQL instance |
-| `postgres.readWriteConnectionString` | `""` (in-cluster) | Runtime connection; required for external PostgreSQL |
-| `postgres.ownerConnectionString` | `""` (bundled owner login or external read/write connection) | Connection for migrations and partition maintenance |
-| `postgres.readWriteRole` | `substrate_readwrite` | Role assumed by runtime connections |
-| `postgres.ownerRole` | `substrate_owner` | Role assumed by migration and partition maintenance connections |
+| `postgres.readWriteConnectionStringSecretRef` | `substrate-postgres-readwrite` | Read the read/write connection from a pre-created Secret |
+| `postgres.ownerConnectionStringSecretRef` | `substrate-postgres-owner` | Read the owner connection from a pre-created Secret |
+| `postgres.readWriteRole` | `substrate_readwrite` | Role assumed by read/write connections |
+| `postgres.ownerRole` | `substrate_owner` | Role assumed by owner connections |
 | `postgres.schema` | `substrate` | Store the Substrate tables in this PostgreSQL schema |
-| `postgres.storageSize` | `1Gi` | In-cluster PostgreSQL PVC size |
+| `postgres.clientCertificates.enabled` | `false` | Project separate owner and runtime login certificates into the API server |
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true` |
 | `atelet.imageCredentialProviderConfig` | `""` | Host path to the kubelet credential provider config; set together with the bin directory |
@@ -63,17 +74,33 @@ See `values.yaml` for the full set; the important keys:
 | `otel.logs.enabled` | `true` | Enable OTLP actor events from ateapi and the ateoms, plus the router access log. Actor events go to stdout when OTLP logs are disabled |
 | `otel.logs.endpoint` | `""` | OTLP endpoint for logs, overriding `otel.endpoint` |
 
-Bundled PostgreSQL uses the fixed development owner and runtime logins from
-`pkg/postgressetup`. Its startup hook applies the shared setup SQL through the
-local socket before accepting application work. Each application login uses its
-own projected certificate from `postgres.podcert.ate.dev/identity`, without a
-database password. Administrator access stays local to the PostgreSQL pod.
-External PostgreSQL identities remain operator-managed.
+## PostgreSQL setup
 
-Before upgrading an existing install, run
-`hack/install-ate-kind.sh --create-podcertificate-controller-cas` (or the
-corresponding `hack/install-ate.sh` command outside Kind) to create the new
-`postgres-ca-pool` Secret in `podcertificate-controller-system`. The chart wires
-the signer to the release namespace and API server service account. Upgrade the
-controller, API server, and database together; the database startup hook clears
-the old application passwords.
+The chart does not deploy or initialize PostgreSQL. Prepare the database,
+schema, login users, and the configured `readWriteRole` and `ownerRole` before
+installing the chart. For development Helm installations in `ate-system`,
+run `hack/install-postgres.sh` after installing the separate certificate
+controller and its CA pools. It deploys certificate-protected PostgreSQL,
+runs the shared bootstrap SQL, and creates both connection Secrets. Use `--kind`
+for the smaller Kind deployment; set `KUBECTL_CONTEXT` to select a cluster.
+Standalone manifest installations can continue to use `ate-setup`.
+
+When using `hack/install-postgres.sh`, install the application chart with
+`--set postgres.clientCertificates.enabled=true`. Its connection Secrets use
+the projected owner and runtime certificates. For external databases using
+password or provider-managed authentication, leave this setting disabled.
+Service-DNS and pod-identity certificates remain enabled for Substrate's
+internal connections. Standalone manifest generation enables the PostgreSQL
+certificates for the bundled development database.
+
+For an operator-managed database, the operator must provision the identities,
+schema, and grants, and create both connection Secrets in the release namespace.
+
+Substrate runs `SET ROLE` for each new connection. It rejects a login without
+the required membership.
+
+Create both group roles and all grants before installation, then set
+`postgres.readWriteRole` and `postgres.ownerRole` to those names. Use distinct
+roles and table schemas for separate installs sharing one database. Give each
+install separate logins and grant each login membership only in its install's
+roles.
