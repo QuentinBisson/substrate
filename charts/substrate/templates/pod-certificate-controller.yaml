@@ -75,6 +75,7 @@ rules:
   resourceNames:
   - servicedns.podcert.ate.dev/*
   - podidentity.podcert.ate.dev/*
+  - postgres.podcert.ate.dev/*
   verbs:
   - sign
   - attest
@@ -159,6 +160,9 @@ spec:
         - --sharding-application-name=podcertificate-controller
         - --service-dns-ca-pool=/run/ca-state/service-dns-pool.json
         - --pod-identity-ca-pool=/run/ca-state/pod-identity-pool.json
+        - --postgres-ca-pool=/run/ca-state/postgres-pool.json
+        - --postgres-client-namespace={{ .Release.Namespace }}
+        - --postgres-client-service-account={{ include "substrate.ateApiServer.serviceAccountName" . }}
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -197,6 +201,11 @@ spec:
               items:
               - key: "pool"
                 path: "pod-identity-pool.json"
+          - secret:
+              name: "postgres-ca-pool"
+              items:
+              - key: "pool"
+                path: "postgres-pool.json"
       dnsPolicy: Default
       nodeSelector:
         kubernetes.io/os: linux
