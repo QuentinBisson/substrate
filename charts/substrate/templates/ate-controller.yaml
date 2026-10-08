@@ -71,6 +71,8 @@ spec:
       containers:
       - name: ate-controller
         image: {{ include "substrate.componentImage" (list "atecontroller" .) }}
+        resources:
+{{ toYaml .Values.ateController.resources | indent 10 }}
         args:
         # The atecontroller binary defaults --ateapi-conn-spec to
         # dns:///api.ate-system.svc:443, which is correct only for the

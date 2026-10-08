@@ -84,6 +84,8 @@ spec:
       containers:
       - name: ate-api-server
         image: {{ include "substrate.componentImage" (list "ateapi" .) }}
+        resources:
+{{ toYaml .Values.ateApi.resources | indent 10 }}
         args:
         - "--grpc-listen-addr=0.0.0.0:443"
         - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"

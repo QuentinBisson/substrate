@@ -73,6 +73,13 @@ spec:
       containers:
       - name: rustfs
         image: rustfs/rustfs:1.0.0-beta.3@sha256:378642b05b7dcb4849fb77ebe6aca4ced1c3f66e7e504247df95a5c9018d3358
+        resources:
+          limits:
+            cpu: "1"
+            memory: 1Gi
+          requests:
+            cpu: 50m
+            memory: 256Mi
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 9000
@@ -114,6 +121,13 @@ spec:
       containers:
       - name: create-bucket
         image: amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 10m
+            memory: 128Mi
         env:
         - name: AWS_ACCESS_KEY_ID
           value: "rustfsadmin"

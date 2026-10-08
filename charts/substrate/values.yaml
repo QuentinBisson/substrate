@@ -46,6 +46,22 @@ rustfs:
   bucket: ate-snapshots
   accessKey: rustfsadmin
   secretKey: rustfsadmin
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  # The Job that creates the snapshot bucket.
+  bucketInit:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
 
 # atelet daemonset overrides. Defaults use the in-cluster RustFS deployment for
 # snapshots. Set rustfs.enabled=false and override these fields when using
@@ -66,10 +82,53 @@ atelet:
   storageBackend: s3
   extraArgs: []
   extraEnv: []
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
 
 # Additional arguments appended to the ateapi defaults.
 ateApi:
   extraArgs: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+ateController:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+atenetRouter:
+  agentgateway:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+
+atenetEgress:
+  agentgateway:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
 
 # Kubernetes Secret provider and AGW HTTP/HTTPS credential injection.
 # Includes get-only Secret RBAC. HTTPS requires egress-mitm-ca-pool and actor trust.
@@ -77,6 +136,13 @@ credentialProvider:
   namespacePolicies: []
   # - atespace: team-a
   #   allowedNamespaces: [team-a-secrets]
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
 
 # Name of a ConfigMap in the release namespace that supplies per-environment
 # overrides for ate-api-server (ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING, ...).

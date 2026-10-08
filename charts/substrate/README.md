@@ -58,6 +58,7 @@ See `values.yaml` for the full set; the important keys:
 | `postgres.ownerRole` | `substrate_owner` | Role assumed by owner connections |
 | `postgres.schema` | `substrate` | Store the Substrate tables in this PostgreSQL schema |
 | `postgres.clientCertificates.enabled` | `false` | Project separate owner and runtime login certificates into the API server |
+| `<component>.resources` | see `values.yaml` | Requests and limits for each container, e.g. `ateApi.resources` and `atenetRouter.agentgateway.resources` |
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true` |
 | `atelet.imageCredentialProviderConfig` | `""` | Host path to the kubelet credential provider config; set together with the bin directory |

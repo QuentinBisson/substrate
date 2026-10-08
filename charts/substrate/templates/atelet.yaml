@@ -158,9 +158,7 @@ spec:
             add:
             - DAC_OVERRIDE
         resources:
-          requests:
-            cpu: 50m
-            memory: 128Mi
+{{ toYaml .Values.atelet.resources | indent 10 }}
         env:
         - name: NODE_NAME
           valueFrom:

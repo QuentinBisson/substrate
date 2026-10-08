@@ -137,6 +137,8 @@ spec:
       containers:
       - name: agentgateway
         image: {{ include "substrate.thirdPartyImage" (list .Values.images.agentgateway .) }}
+        resources:
+{{ toYaml .Values.atenetEgress.agentgateway.resources | indent 10 }}
         args:
         - -f
         - /etc/agentgateway/config.yaml

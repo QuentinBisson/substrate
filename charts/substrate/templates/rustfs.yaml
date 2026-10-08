@@ -74,6 +74,8 @@ spec:
       containers:
       - name: rustfs
         image: {{ include "substrate.thirdPartyImage" (list .Values.images.rustfs .) }}
+        resources:
+{{ toYaml .Values.rustfs.resources | indent 10 }}
         imagePullPolicy: {{ include "substrate.imagePullPolicy" . }}
         ports:
         - containerPort: 9000
@@ -116,6 +118,8 @@ spec:
       containers:
       - name: create-bucket
         image: {{ include "substrate.thirdPartyImage" (list .Values.images.awsCli .) }}
+        resources:
+{{ toYaml .Values.rustfs.bucketInit.resources | indent 10 }}
         env:
         - name: AWS_ACCESS_KEY_ID
           value: {{ .Values.rustfs.accessKey | quote }}
