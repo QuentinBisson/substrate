@@ -35,6 +35,7 @@ type AtenetDataplane interface {
 	IsRetryableParkingBudgetExhaustion(status int, body string) bool
 	ParkingBudgetStatus() int
 	IsEgressPolicyDenied(status int, body string) bool
+	EgressUpgradeDeniedBody() string
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
 }
@@ -66,6 +67,10 @@ func (envoyAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body 
 
 func (envoyAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
 
+func (envoyAtenetDataplane) EgressUpgradeDeniedBody() string {
+	return "WebSocket egress is not supported"
+}
+
 func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 	return (status == http.StatusForbidden && strings.Contains(body, "egress denied")) ||
 		(status == http.StatusBadGateway && strings.Contains(body, "request failed"))
@@ -88,6 +93,10 @@ func (agentGatewayAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int
 }
 
 func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusGatewayTimeout }
+
+func (agentGatewayAtenetDataplane) EgressUpgradeDeniedBody() string {
+	return "HTTP upgrades, including CONNECT, are denied for actor egress"
+}
 
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 	return status == http.StatusForbidden && strings.Contains(body, "actor egress policy denied")
