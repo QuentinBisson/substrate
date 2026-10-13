@@ -85,6 +85,22 @@ resources now put assets and `pauseImage` under `spec.versions[]`, with a named
 `spec.defaultVersion`. WorkerPools use `spec.sandboxClasses[]`, and actor
 templates continue to select the config with `sandboxConfig.configName`.
 
+WorkerPools now resolve `spec.sandboxClasses[].configRef` or the class default
+before creating their worker Deployment. Ensure each pool names an existing
+config of the same class, or that one is annotated
+`sandboxconfig.ate.dev/is-class-default: "true"`. The chart supplies that
+annotation on `gvisor-default`. Sandbox class names are immutable; create a
+new pool to change runtime families. Configs referenced by a pool are protected
+from deletion until the pool switches configs or is deleted.
+
+Update API clients for the simplified snapshot model: `Snapshot.uuid`,
+`fidelity`, `locality`, and `durableSnapshot` replace the `storage[]` entries,
+and durable snapshot status uses `PENDING` instead of `IN_PROGRESS`. The proto
+field numbers changed, so upgrade clients and components together.
+Persisted Actor and Tag snapshot metadata uses the same protobuf schema and
+is not migrated by this update. For development installs, delete affected
+Actors and Tags with the old version, then recreate them after upgrading.
+
 Snapshot transfers now run in native sidecars in the API server and atelet
 pods. Move external object storage environment settings from
 `atelet.extraEnv` or the API environment ConfigMap to
