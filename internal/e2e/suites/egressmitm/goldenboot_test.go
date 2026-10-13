@@ -35,9 +35,6 @@ var bootFetchManifests = e2e.SubstrateFixtureManifests{
 //
 //	hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -run TestGoldenBootEgress -v -args --no-color
 func TestGoldenBootEgress(t *testing.T) {
-	if !e2e.CurrentAtenetDataplane().SupportsEgressWhileResuming() {
-		t.Skip("the agentgateway dataplane admits egress from RUNNING actors only")
-	}
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
