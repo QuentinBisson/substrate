@@ -136,19 +136,21 @@ spec:
         effect: NoSchedule
       {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       initContainers:
-      - name: snapshot-plugin
-        image: {{ include "substrate.componentImage" (list "snapshot-plugin" .) }}
+      - name: objectstore-plugin
+        image: {{ include "substrate.componentImage" (list "objectstore-plugin" .) }}
         restartPolicy: Always
         args:
         - node
-        - --socket=/run/snapshot-plugin/node.sock
+        - --socket=/run/objectstore-plugin/node.sock
         - --root=/var/lib/ate
+        - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
+        - --asset-staging-capacity=8Gi
         startupProbe:
           exec:
             command:
-            - /ko-app/snapshot-plugin
+            - /ko-app/objectstore-plugin
             - healthcheck
-            - --socket=/run/snapshot-plugin/node.sock
+            - --socket=/run/objectstore-plugin/node.sock
           periodSeconds: 2
           failureThreshold: 30
         securityContext:
@@ -157,7 +159,7 @@ spec:
           capabilities:
             drop: [ALL]
         resources:
-{{ toYaml .Values.snapshotPlugin.node.resources | indent 10 }}
+{{ toYaml .Values.objectStorePlugin.node.resources | indent 10 }}
         env:
 {{- include "substrate.storage.env" . | nindent 8 }}
 {{- with include "substrate.otel.env" . }}
@@ -166,13 +168,15 @@ spec:
         volumeMounts:
         - name: run-ateom
           mountPath: /var/lib/ate
-        - name: snapshot-plugin
-          mountPath: /run/snapshot-plugin
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
+        - name: asset-staging
+          mountPath: /var/lib/objectstore-plugin/asset-staging
       containers:
       - name: atelet
         image: {{ include "substrate.componentImage" (list "atelet" .) }}
         args:
-        - --snapshot-plugin-socket=/run/snapshot-plugin/node.sock
+        - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
 {{- if $credentialProviderConfig }}
         - --image-credential-provider-config=/run/image-credential-provider/config.yaml
         - --image-credential-provider-bin-dir=/run/image-credential-provider/bin
@@ -215,7 +219,6 @@ spec:
 {{- with include "substrate.otel.env" . }}
 {{- . | trim | nindent 8 }}
 {{- end }}
-{{- include "substrate.storage.env" . | nindent 8 }}
 {{- with .Values.atelet.extraEnv }}
 {{ toYaml . | indent 8 }}
 {{- end }}
@@ -228,8 +231,8 @@ spec:
           hostPort: 9090
           protocol: TCP
         volumeMounts:
-        - name: snapshot-plugin
-          mountPath: /run/snapshot-plugin
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
         - name: run-ateom
           mountPath: /var/lib/ate
         - name: podidentity
@@ -257,8 +260,12 @@ spec:
           readOnly: true
 {{- end }}
       volumes:
-      - name: snapshot-plugin
+      - name: objectstore-plugin
         emptyDir: {}
+      # Capacity plus 1Gi for filesystem overhead; only the plugin mounts it.
+      - name: asset-staging
+        emptyDir:
+          sizeLimit: 9Gi
       - name: run-ateom
         hostPath:
           path: /var/lib/ate

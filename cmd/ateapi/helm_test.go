@@ -196,7 +196,7 @@ func TestHelmPostgresCertificates(t *testing.T) {
 
 // Snapshot transfers must reach the same backend from both plugin processes.
 // The API rejects storage settings on its own container after the plugin split.
-func TestHelmSnapshotPlugins(t *testing.T) {
+func TestHelmObjectStorePlugins(t *testing.T) {
 	for _, external := range []bool{false, true} {
 		t.Run(fmt.Sprintf("external=%t", external), func(t *testing.T) {
 			args := []string{"template", "test", "../../charts/substrate", "-n", "custom"}
@@ -205,8 +205,8 @@ func TestHelmSnapshotPlugins(t *testing.T) {
 				issuer = "https://actors.example.com"
 				args = append(args, "--set", "rustfs.enabled=false", "--set", "atelet.storageBackend=gcs",
 					"--set", "ateApi.actorJWTIssuer="+issuer,
-					"--set", "snapshotPlugin.extraEnv[0].name=GOOGLE_APPLICATION_CREDENTIALS",
-					"--set", "snapshotPlugin.extraEnv[0].value=/credentials/key.json")
+					"--set", "objectStorePlugin.extraEnv[0].name=GOOGLE_APPLICATION_CREDENTIALS",
+					"--set", "objectStorePlugin.extraEnv[0].value=/credentials/key.json")
 			}
 			out, err := exec.CommandContext(t.Context(), "helm", args...).CombinedOutput()
 			if err != nil {
@@ -239,8 +239,8 @@ func TestHelmSnapshotPlugins(t *testing.T) {
 					t.Fatalf("%s: expected one snapshot sidecar, got %v", mode, pod.InitContainers)
 				}
 				plugin := pod.InitContainers[0]
-				socketArg := "--socket=/run/snapshot-plugin/" + mode + ".sock"
-				if plugin.Name != "snapshot-plugin" || plugin.RestartPolicy == nil || *plugin.RestartPolicy != corev1.ContainerRestartPolicyAlways || !slices.Contains(plugin.Args, mode) || !slices.Contains(plugin.Args, socketArg) {
+				socketArg := "--socket=/run/objectstore-plugin/" + mode + ".sock"
+				if plugin.Name != "objectstore-plugin" || plugin.RestartPolicy == nil || *plugin.RestartPolicy != corev1.ContainerRestartPolicyAlways || !slices.Contains(plugin.Args, mode) || !slices.Contains(plugin.Args, socketArg) {
 					t.Fatalf("%s: invalid snapshot sidecar: %+v", mode, plugin)
 				}
 				if plugin.StartupProbe == nil || plugin.StartupProbe.Exec == nil || !slices.Contains(plugin.StartupProbe.Exec.Command, socketArg) {
@@ -257,16 +257,16 @@ func TestHelmSnapshotPlugins(t *testing.T) {
 				} else if env["ATE_STORAGE_BACKEND"] != "s3" || env["AWS_ENDPOINT_URL"] != "http://test-rustfs.custom.svc:9000" || env["AWS_ACCESS_KEY_ID"] == "" || env["AWS_SECRET_ACCESS_KEY"] == "" {
 					t.Errorf("%s: RustFS storage settings = %v", mode, env)
 				}
-				if !slices.ContainsFunc(pod.Volumes, func(v corev1.Volume) bool { return v.Name == "snapshot-plugin" && v.EmptyDir != nil }) {
+				if !slices.ContainsFunc(pod.Volumes, func(v corev1.Volume) bool { return v.Name == "objectstore-plugin" && v.EmptyDir != nil }) {
 					t.Errorf("%s: missing shared socket volume", mode)
 				}
 				for _, container := range append(pod.Containers, plugin) {
 					if !slices.ContainsFunc(container.VolumeMounts, func(m corev1.VolumeMount) bool {
-						return m.Name == "snapshot-plugin" && m.MountPath == "/run/snapshot-plugin"
+						return m.Name == "objectstore-plugin" && m.MountPath == "/run/objectstore-plugin"
 					}) {
 						t.Errorf("%s: %s does not mount the shared socket", mode, container.Name)
 					}
-					if container.Name == app && !slices.Contains(container.Args, "--snapshot-plugin-socket=/run/snapshot-plugin/"+mode+".sock") {
+					if container.Name == app && !slices.Contains(container.Args, "--objectstore-plugin-socket=/run/objectstore-plugin/"+mode+".sock") {
 						t.Errorf("%s: application does not use the plugin socket", mode)
 					}
 					if container.Name == "ate-api-server" && slices.ContainsFunc(container.Env, func(e corev1.EnvVar) bool { return e.Name == "ATE_STORAGE_BACKEND" }) {

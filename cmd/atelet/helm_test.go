@@ -15,13 +15,17 @@
 package main
 
 import (
+	"os"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/yaml"
 )
 
@@ -133,5 +137,96 @@ providers: []`
 				}
 			}
 		})
+	}
+}
+
+func TestHelmSandboxAssetStorage(t *testing.T) {
+	for _, tc := range []struct {
+		name, backend string
+		rustfs        bool
+	}{
+		{name: "rustfs", backend: "s3", rustfs: true},
+		{name: "external s3", backend: "s3"},
+		{name: "gcs", backend: "gcs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"template", "substrate", "../../charts/substrate", "--show-only", "templates/atelet.yaml",
+				"--set", "atelet.storageBackend=" + tc.backend,
+				"--set", "objectStorePlugin.extraEnv[0].name=AWS_REGION",
+				"--set", "objectStorePlugin.extraEnv[0].value=us-west-2"}
+			if !tc.rustfs {
+				args = append(args, "--set", "rustfs.enabled=false")
+			}
+			out, err := exec.CommandContext(t.Context(), "helm", args...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("render: %v\n%s", err, out)
+			}
+			var pod *corev1.PodSpec
+			for _, doc := range strings.Split(string(out), "\n---\n") {
+				var ds appsv1.DaemonSet
+				if err := yaml.Unmarshal([]byte(doc), &ds); err != nil {
+					t.Fatal(err)
+				}
+				if ds.Kind == "DaemonSet" {
+					pod = &ds.Spec.Template.Spec
+				}
+			}
+			if pod == nil || len(pod.Containers) != 1 || len(pod.InitContainers) != 1 {
+				t.Fatal("expected atelet with one object-store plugin sidecar")
+			}
+			for _, env := range pod.Containers[0].Env {
+				if env.Name == "ATE_STORAGE_BACKEND" || strings.HasPrefix(env.Name, "AWS_") {
+					t.Errorf("atelet receives plugin storage setting %s", env.Name)
+				}
+			}
+			plugin := pod.InitContainers[0]
+			if !slices.Contains(plugin.Env, corev1.EnvVar{Name: "ATE_STORAGE_BACKEND", Value: tc.backend}) ||
+				!slices.Contains(plugin.Env, corev1.EnvVar{Name: "AWS_REGION", Value: "us-west-2"}) {
+				t.Errorf("object-store plugin is missing configured storage settings: %v", plugin.Env)
+			}
+			for _, arg := range []string{"--asset-staging-dir=/var/lib/objectstore-plugin/asset-staging", "--asset-staging-capacity=8Gi"} {
+				if !slices.Contains(plugin.Args, arg) {
+					t.Errorf("object-store plugin is missing %s", arg)
+				}
+			}
+			mount := corev1.VolumeMount{Name: "asset-staging", MountPath: "/var/lib/objectstore-plugin/asset-staging"}
+			if !slices.ContainsFunc(plugin.VolumeMounts, func(m corev1.VolumeMount) bool {
+				return m.Name == mount.Name && m.MountPath == mount.MountPath && !m.ReadOnly
+			}) {
+				t.Error("object-store plugin cannot access asset staging")
+			}
+			for _, m := range pod.Containers[0].VolumeMounts {
+				if m.Name == mount.Name {
+					t.Error("atelet can access unverified staged assets")
+				}
+			}
+			i := slices.IndexFunc(pod.Volumes, func(v corev1.Volume) bool { return v.Name == mount.Name })
+			if i < 0 || pod.Volumes[i].EmptyDir == nil || pod.Volumes[i].EmptyDir.SizeLimit == nil ||
+				pod.Volumes[i].EmptyDir.SizeLimit.Cmp(resource.MustParse("9Gi")) != 0 {
+				t.Error("asset staging needs an emptyDir with capacity plus filesystem overhead")
+			}
+		})
+	}
+}
+
+func TestHelmGVisorSandboxConfigMatchesManifest(t *testing.T) {
+	out, err := exec.CommandContext(t.Context(), "helm", "template", "substrate", "../../charts/substrate",
+		"--show-only", "templates/sandboxconfig-gvisor.yaml").CombinedOutput()
+	if err != nil {
+		t.Fatalf("render: %v\n%s", err, out)
+	}
+	manifest, err := os.ReadFile("../../manifests/ate-install/sandboxconfig-gvisor.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, want atev1alpha1.SandboxConfig
+	if err := yaml.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(manifest, &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Spec, want.Spec) {
+		t.Errorf("Helm sandbox config must match the runtime assets in the upstream manifest: got %+v, want %+v", got.Spec, want.Spec)
 	}
 }

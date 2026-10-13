@@ -234,7 +234,7 @@ definition so the fallback cannot drift between pods.
 {{- ((.Values.global).imagePullPolicy) | default "IfNotPresent" -}}
 {{- end -}}
 
-{{/* Object storage settings shared by snapshot plugins and atelet asset downloads. */}}
+{{/* Object storage settings shared by object-store plugins. */}}
 {{- define "substrate.storage.env" -}}
 - name: ATE_STORAGE_BACKEND
   value: {{ .Values.atelet.storageBackend | quote }}
@@ -250,7 +250,7 @@ definition so the fallback cannot drift between pods.
 - name: AWS_SECRET_ACCESS_KEY
   value: {{ .Values.rustfs.secretKey | quote }}
 {{- end }}
-{{- with .Values.snapshotPlugin.extraEnv }}
+{{- with .Values.objectStorePlugin.extraEnv }}
 {{ toYaml . }}
 {{- end }}
 {{- end }}
