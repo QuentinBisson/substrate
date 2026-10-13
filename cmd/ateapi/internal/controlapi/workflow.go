@@ -27,7 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -112,13 +112,13 @@ type ActorWorkflow struct {
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
 	workflowDeadline     time.Duration
-	snapshotPlugin       objectstorev1.ControlProviderClient
+	objectStorePlugin    objectstorev1.ControlProviderClient
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. workflowDeadline bounds
 // each Resume/Suspend workflow end-to-end; instruments may be nil.
 //
-// snapshotPlugin may be nil, which leaves external snapshots in place instead
+// objectStorePlugin may be nil, which leaves external snapshots in place instead
 // of copying and releasing them. Only tests that never reach those steps pass
 // nil; ate-api always builds one.
 func NewActorWorkflow(
@@ -131,7 +131,7 @@ func NewActorWorkflow(
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
 	workflowDeadline time.Duration,
-	snapshotPlugin objectstorev1.ControlProviderClient,
+	objectStorePlugin objectstorev1.ControlProviderClient,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
@@ -144,22 +144,22 @@ func NewActorWorkflow(
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
 		workflowDeadline:     workflowDeadline,
-		snapshotPlugin:       snapshotPlugin,
+		objectStorePlugin:    objectStorePlugin,
 	}
 }
 
 // cleanupSnapshot deletes every object under prefix through the control
-// snapshot plugin.
+// object-store plugin.
 func (w *ActorWorkflow) cleanupSnapshot(ctx context.Context, prefix resources.StoragePrefix) error {
-	_, err := w.snapshotPlugin.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: prefix.String()})
-	return objectstoreplugin.CallError(err)
+	_, err := w.objectStorePlugin.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: prefix.String()})
+	return pluginsocket.CallError(err)
 }
 
 // copySnapshot copies every object under src to dst through the control
-// snapshot plugin.
+// object-store plugin.
 func (w *ActorWorkflow) copySnapshot(ctx context.Context, src, dst resources.StoragePrefix) error {
-	_, err := w.snapshotPlugin.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
-	return objectstoreplugin.CallError(err)
+	_, err := w.objectStorePlugin.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
+	return pluginsocket.CallError(err)
 }
 
 // actorWorkflowStore enumerates the exact storage methods needed by

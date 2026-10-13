@@ -66,8 +66,8 @@ See `values.yaml` for the full set; the important keys:
 | `atelet.imageCredentialProviderBinDir` | `""` | Host path to the kubelet credential provider binaries; both paths are mounted read-only |
 | `credentialProvider.namespacePolicies` | `[]` | Default-deny atespace-to-namespace grants; the chart includes get-only Secret RBAC for the provider |
 | `ateApi.actorJWTIssuer` | `https://idp.<namespace>.svc` | Issuer placed in actor JWTs; set a stable URL reachable by relying parties |
-| `snapshotPlugin.extraEnv` | `[]` | Object storage credentials/settings shared by both snapshot plugins and atelet |
-| `snapshotPlugin.control.resources` / `snapshotPlugin.node.resources` | see `values.yaml` | Resources for the API and node snapshot sidecars |
+| `objectStorePlugin.extraEnv` | `[]` | Object storage credentials/settings shared by both object-store plugins |
+| `objectStorePlugin.control.resources` / `objectStorePlugin.node.resources` | see `values.yaml` | Resources for the API and node object-store sidecars |
 | `ateApi.extraArgs` | `[]` | Additional command-line arguments appended to the ateapi defaults |
 | `otel.endpoint` | `""` | Set to an OTLP endpoint to export traces, metrics, the actor lifecycle events and the router access log |
 | `otel.traces.enabled` | `true` | Set to `false` to export no traces from the router; the Go components do not honor this yet |
@@ -101,12 +101,19 @@ Persisted Actor and Tag snapshot metadata uses the same protobuf schema and
 is not migrated by this update. For development installs, delete affected
 Actors and Tags with the old version, then recreate them after upgrading.
 
-Snapshot transfers now run in native sidecars in the API server and atelet
-pods. Move external object storage environment settings from
+Snapshot transfers now run in `objectstore-plugin` native sidecars in the
+API server and atelet pods. Rename existing `snapshotPlugin` Helm settings
+to `objectStorePlugin`. Move external object storage environment settings from
 `atelet.extraEnv` or the API environment ConfigMap to
-`snapshotPlugin.extraEnv`, so both plugins and atelet asset downloads receive
-them. `ATE_STORAGE_BACKEND` must not be set on the API server itself; select
-it through `atelet.storageBackend`. RustFS is wired automatically.
+`objectStorePlugin.extraEnv`, so both plugins receive them. The node plugin also
+downloads private sandbox assets into an isolated staging volume before
+verifying and publishing them. `ATE_STORAGE_BACKEND` must not be set on the
+API server or atelet itself; select it through `atelet.storageBackend`.
+RustFS is wired automatically. Private S3 asset URLs must use `s3://`.
+
+The default gVisor config now uses the 2026-10-10 nightly (`v3`) for split
+filesystem checkpoints. Upgrade the sandbox config together with ateom-gvisor;
+custom configs must pin a release with the same checkpoint support.
 
 ## PostgreSQL setup
 

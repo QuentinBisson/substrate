@@ -82,40 +82,40 @@ spec:
       terminationGracePeriodSeconds: 40
       {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       initContainers:
-      - name: snapshot-plugin
-        image: {{ include "substrate.componentImage" (list "snapshot-plugin" .) }}
+      - name: objectstore-plugin
+        image: {{ include "substrate.componentImage" (list "objectstore-plugin" .) }}
         restartPolicy: Always
         args:
         - control
-        - --socket=/run/snapshot-plugin/control.sock
+        - --socket=/run/objectstore-plugin/control.sock
         startupProbe:
           exec:
             command:
-            - /ko-app/snapshot-plugin
+            - /ko-app/objectstore-plugin
             - healthcheck
-            - --socket=/run/snapshot-plugin/control.sock
+            - --socket=/run/objectstore-plugin/control.sock
           periodSeconds: 2
           failureThreshold: 30
         securityContext:
           capabilities:
             drop: [ALL]
         resources:
-{{ toYaml .Values.snapshotPlugin.control.resources | indent 10 }}
+{{ toYaml .Values.objectStorePlugin.control.resources | indent 10 }}
         env:
 {{- include "substrate.storage.env" . | nindent 8 }}
 {{- with include "substrate.otel.env" . }}
 {{- . | trim | nindent 8 }}
 {{- end }}
         volumeMounts:
-        - name: snapshot-plugin
-          mountPath: /run/snapshot-plugin
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
       containers:
       - name: ate-api-server
         image: {{ include "substrate.componentImage" (list "ateapi" .) }}
         resources:
 {{ toYaml .Values.ateApi.resources | indent 10 }}
         args:
-        - --snapshot-plugin-socket=/run/snapshot-plugin/control.sock
+        - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
         - "--grpc-listen-addr=0.0.0.0:443"
         - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
         - "--authentication-config=/etc/ateapi/authentication/authentication.yaml"
@@ -169,8 +169,8 @@ spec:
             name: {{ .Values.ateApiServerEnvVarsConfigMap }}
             optional: true
         volumeMounts:
-        - name: snapshot-plugin
-          mountPath: /run/snapshot-plugin
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
         - { name: servicedns,          mountPath: /run/servicedns.podcert.ate.dev }
         - { name: actor-id-jwt-pool,   mountPath: /run/actor-id-jwt-pool }
         - { name: actor-id-ca-pool,    mountPath: /run/actor-id-ca-pool, readOnly: true }
@@ -197,7 +197,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
       volumes:
-      - name: snapshot-plugin
+      - name: objectstore-plugin
         emptyDir: {}
       - name: servicedns
         projected:
