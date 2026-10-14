@@ -161,7 +161,7 @@ func TestProviderManifests(t *testing.T) {
 						}
 						args := strings.Join(container.Args, " ")
 						for _, required := range []string{
-							"--listen-address=:50051", "--metrics-address=:9090",
+							"--listen-address=:50051", "--metrics-address=:9090", "--health-address=:9091",
 							"--injector-identity=spiffe://cluster.local/ns/" + tc.namespace + "/sa/" + tc.prefix + "atenet-egress",
 							"--server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem",
 							"--client-ca-file=/run/podidentity.podcert.ate.dev/trust-bundle.pem",
@@ -173,8 +173,14 @@ func TestProviderManifests(t *testing.T) {
 								t.Errorf("provider missing %s", required)
 							}
 						}
-						if container.ReadinessProbe == nil || container.ReadinessProbe.HTTPGet.Port.StrVal != "metrics" {
+						if container.ReadinessProbe == nil || container.ReadinessProbe.HTTPGet == nil ||
+							container.ReadinessProbe.HTTPGet.Port.StrVal != "health" || container.ReadinessProbe.HTTPGet.Path != "/readyz" {
 							t.Fatal("missing dedicated readiness probe")
+						}
+						if !slices.ContainsFunc(container.Ports, func(port corev1.ContainerPort) bool {
+							return port.Name == "health" && port.ContainerPort == 9091
+						}) {
+							t.Fatal("missing health listener port")
 						}
 					}
 				case "Service":

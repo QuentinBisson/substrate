@@ -115,6 +115,20 @@ The default gVisor config now uses the 2026-10-10 nightly (`v3`) for split
 filesystem checkpoints. Upgrade the sandbox config together with ateom-gvisor;
 custom configs must pin a release with the same checkpoint support.
 
+The chart now denies ingress to the control-plane namespace by default and
+allows the component, router, egress, storage, and monitoring traffic it needs.
+Label namespaces containing API clients with `ate.dev/api-access=true`; worker
+pods remain excluded from that client allowance. Custom workloads sharing the
+control-plane namespace need their own ingress policies. Custom health probes
+for the API server, atelet, and credential provider must use port 9091;
+port 9090 serves metrics only.
+
+Update API clients for pagination under `ListOptions`, the renamed
+`MintActorJwt` RPC and TitleCase protobuf type names, `WakeupProbe`, and the
+`*_time` timestamp fields. Pausing now transitions through `SUSPENDING` to
+`SUSPENDED`; use snapshot locality to distinguish a paused actor. Upgrade
+clients and components together.
+
 ## PostgreSQL setup
 
 The chart does not deploy or initialize PostgreSQL. Prepare the database,

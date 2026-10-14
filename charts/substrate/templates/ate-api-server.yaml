@@ -129,6 +129,9 @@ spec:
         - "--actor-id-ca-pool=/run/actor-id-ca-pool/pool.json"
         - "--default-egress-gateway-address={{ include "substrate.fullname" (list "atenet-egress" .) }}.{{ .Release.Namespace }}.svc:443"
         - '--atelet-service-account={{ include "substrate.fullname" (list "atelet" .) }}'
+        - '--controller-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "ate-controller" .) }}'
+        - '--egress-gateway-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "atenet-egress" .) }}'
+        - '--ingress-router-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "atenet-router" .) }}'
         - "--atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
         - "--pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem"
         - "--drain-delay=13s"
@@ -183,17 +186,25 @@ spec:
         - containerPort: 443
         - name: prometheus
           containerPort: 9090
+        - name: health
+          containerPort: 9091
         readinessProbe:
           httpGet:
             path: /readyz
-            port: 9090
+            port: health
           initialDelaySeconds: 5
           periodSeconds: 2
           failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          periodSeconds: 5
+          failureThreshold: 24
         livenessProbe:
           httpGet:
             path: /healthz
-            port: 9090
+            port: health
           initialDelaySeconds: 10
           periodSeconds: 10
       volumes:
