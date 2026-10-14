@@ -84,6 +84,7 @@ spec:
         - '--router-service-account={{ include "substrate.fullname" (list "atenet-router" .) }}'
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+        - "--dns-egress-policy=enforce-in-atunnel"
         env:
         - name: POD_NAMESPACE
           valueFrom:

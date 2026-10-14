@@ -68,7 +68,8 @@ func TestKubernetesCredentialInjection(t *testing.T) {
 		},
 		VolumeMounts: []corev1.VolumeMount{{Name: "token", MountPath: "/run/token", ReadOnly: true}},
 	})
-	host := "credential-origin." + namespace + ".svc"
+	// Match the DNS query's fully qualified name in the egress policy.
+	host := "credential-origin." + namespace + ".svc.cluster.local"
 	router, err := e2e.NewRouterClient(ctx)
 	require.NoError(t, err)
 	t.Cleanup(router.Close)
