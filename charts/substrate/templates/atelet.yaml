@@ -59,8 +59,9 @@ rules:
   verbs: ["get", "watch", "list"]
 # SandboxConfigs are watched to pre-download sandbox assets into the node's
 # cache before the first actor needs them (see cmd/atelet/sandbox_prewarm.go).
+# WorkerPools identify the SandboxConfig for each local worker.
 - apiGroups: ["ate.dev"]
-  resources: ["sandboxconfigs"]
+  resources: ["sandboxconfigs", "workerpools"]
   verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -228,8 +229,23 @@ spec:
           hostPort: 8085
         - name: prometheus
           containerPort: 9090
-          hostPort: 9090
           protocol: TCP
+        - name: health
+          containerPort: 9091
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
         volumeMounts:
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin

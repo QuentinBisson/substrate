@@ -148,4 +148,31 @@ spec:
           done
           echo "timed out waiting for rustfs"
           exit 1
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "substrate.fullname" (list "rustfs" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: rustfs
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchExpressions:
+        - key: app
+          operator: In
+          values:
+          - ate-api-server
+          - atelet
+    - podSelector:
+        matchLabels:
+          batch.kubernetes.io/job-name: {{ include "substrate.fullname" (list "rustfs-bucket-init" .) }}
+    ports:
+    - protocol: TCP
+      port: api
 {{- end }}
