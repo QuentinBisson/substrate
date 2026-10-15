@@ -374,7 +374,7 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 				if !strings.HasSuffix(authority, ":"+port) {
 					continue
 				}
-				spiffeSlug := "/ateom-for-actor/" + atespace + "/" + actorName
+				spiffeSlug := "/worker-for-actor/" + atespace + "/" + actorName
 				if !strings.Contains(line.text, spiffeSlug) {
 					continue
 				}
@@ -963,7 +963,7 @@ func postEgressWithStatus(t *testing.T, ctx context.Context, router *e2e.RouterC
 func assertProtocolGateway(t *testing.T, ctx context.Context, since metav1.Time, actorName, authority string) {
 	t.Helper()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
-	identity := resources.AteomForActorSPIFFEID(actorRef).String()
+	identity := resources.WorkerForActorSPIFFEID(actorRef).String()
 	// The authenticated CONNECT record identifies the actor and destination.
 	// Callers separately verify the HTTPS response using only the gateway's CA,
 	// so a successful TLS handshake proves interception rather than passthrough.
@@ -988,7 +988,7 @@ func protocolGatewayAccessLogMatches(entry gatewayAccessLogLine, actorRef resour
 			return false
 		}
 		for peer := range strings.SplitSeq(peers, ",") {
-			if peer == resources.AteomForActorSPIFFEID(actorRef).String() {
+			if peer == resources.WorkerForActorSPIFFEID(actorRef).String() {
 				return true
 			}
 		}

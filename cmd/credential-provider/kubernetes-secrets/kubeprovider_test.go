@@ -172,8 +172,8 @@ func TestFetchSecretAuthorization(t *testing.T) {
 			wantCode:      codes.PermissionDenied,
 		},
 		{
-			name:          "ateom identity",
-			actorSpiffeID: "spiffe://substrate-actor.local/ateom-for-actor/team-a/my-actor",
+			name:          "worker identity",
+			actorSpiffeID: "spiffe://substrate-actor.local/worker-for-actor/team-a/my-actor",
 			uri:           "ate-secret://k8s.io/default/ns1/example-api/token",
 			wantCode:      codes.PermissionDenied,
 		},
