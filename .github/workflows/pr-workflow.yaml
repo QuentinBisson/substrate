@@ -90,8 +90,8 @@ jobs:
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db
-          cmd/dataplane/envoy/dynamic-modules/*/target
-        key: cargo-${{ runner.os }}-${{ hashFiles('cmd/dataplane/envoy/dynamic-modules/*/Cargo.lock') }}
+          cmd/dataplane/envoy/dynamic-modules/target
+        key: cargo-${{ runner.os }}-${{ hashFiles('cmd/dataplane/envoy/dynamic-modules/Cargo.lock') }}
         restore-keys: cargo-${{ runner.os }}-
     - name: dynamic module tests
       run: |
@@ -122,8 +122,10 @@ jobs:
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
+  # Each preview mode runs on a fresh cluster with agentgateway.
+  # The default install retains the required e2e-test check name.
   e2e-test:
-    name: e2e-test
+    name: ${{ matrix.preview == 'off' && 'e2e-test' || 'e2e-test (preview)' }}
     runs-on: ubuntu-latest
     # Cluster bring-up, image builds and two sequential lanes; generous, but far
     # short of the six-hour platform default a hung lane would otherwise consume.
@@ -131,8 +133,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-        - dataplane: agentgateway
+        dataplane: ['agentgateway']
+        preview: ['off', 'on']
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       # The installer requires a credential provider selection, and deploys the
@@ -140,6 +142,14 @@ jobs:
       # because every ate-setup invocation reads it, including the control
       # plane redeploy in run-microvm-demo-kind.sh.
       ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
+      # Job-wide for the same reason. Empty is an explicit "no preview
+      # features", not an unset value. The e2e steps pass it to the suites as
+      # --preview, so tests of a disabled gate skip themselves (see
+      # internal/e2e/preview.go).
+      ATE_PREVIEW: ${{ matrix.preview == 'on' && 'ALL' || '' }}
+      # Appended to the lane and artifact names: e2e-gvisor runs without
+      # preview features, e2e-gvisor-preview with them.
+      LANE_SUFFIX: ${{ matrix.preview == 'on' && '-preview' || '' }}
       # E2E_JUNIT_FILE is set per step, not here: the lanes below share this
       # job, so one job-level path would have each overwrite the last.
       ARTIFACTS: ${{ github.workspace }}/_artifacts
@@ -147,7 +157,7 @@ jobs:
       # share one copy instead of each storing their own.
       DOCKER_BUILD_FLAGS: >-
         --cache-from type=gha,scope=envoy-dataplane
-        ${{ github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy'
+        ${{ github.ref == 'refs/heads/main' && matrix.preview == 'off'
           && '--cache-to type=gha,mode=max,scope=envoy-dataplane,ignore-error=true' || '' }}
     steps:
     - name: Checkout
@@ -209,8 +219,10 @@ jobs:
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate (${{ matrix.dataplane }})
       # The dataplane selection applies to both the ingress router and egress
-      # gateway.
-      run: hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=${{ matrix.dataplane }} --rollout-timeout=300s
+      # gateway. ATE_PREVIEW above selects the preview features.
+      env:
+        ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
+      run: hack/install-ate-kind.sh --deploy-ate-system --rollout-timeout=300s
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
@@ -240,8 +252,8 @@ jobs:
     - name: Run E2E tests (gVisor)
       env:
         E2E_PARALLELISM: 8
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor.xml
-      run: hack/run-e2e-kind.sh -v -args --no-color
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor${{ env.LANE_SUFFIX }}.xml
+      run: hack/run-e2e-kind.sh -v -args --no-color --preview="${ATE_PREVIEW}"
     - name: Focus the node on micro-VM
       run: hack/e2e-focus-sandbox-class.sh microvm
     - name: Run E2E tests (micro-VM)
@@ -250,8 +262,8 @@ jobs:
       env:
         E2E_SANDBOX_CLASS: microvm
         E2E_PARALLELISM: 8
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm.xml
-      run: hack/run-e2e-kind.sh -v -args --no-color
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm${{ env.LANE_SUFFIX }}.xml
+      run: hack/run-e2e-kind.sh -v -args --no-color --preview="${ATE_PREVIEW}"
     # Every lane must have reported tests; a `-run` filter that stops matching
     # otherwise leaves its lane green and empty. The set comes from the manifest
     # each lane registers itself in, so adding a lane needs no change here, and
@@ -262,7 +274,7 @@ jobs:
     - name: Save Go build cache
       # Main only, so PRs restore the latest main build rather than each
       # storing its own copy.
-      if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.preview == 'off' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
@@ -273,7 +285,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: test-results-e2e-${{ matrix.dataplane }}
+        name: test-results-e2e-${{ matrix.dataplane }}${{ env.LANE_SUFFIX }}
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error
     - name: Dump diagnostics on failure
@@ -289,7 +301,7 @@ jobs:
         done
         # Every worker pod in any namespace: the demo pools plus the e2e suites'
         # randomly-named per-test namespaces, which the suites keep on failure.
-        # The failing actor runs in one of these, so this is where its ateom logs
+        # The failing actor runs in one of these, so this is where its worker logs
         # (and, for a micro-VM worker, the guest console tail) live.
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \

@@ -19,6 +19,30 @@ import (
 	"testing"
 )
 
+func TestAgentGatewayParkingCapacityResponse(t *testing.T) {
+	t.Setenv(AtenetDataplaneEnv, "agentgateway")
+	dataplane := CurrentAtenetDataplane()
+	if got := dataplane.ParkingBudgetStatus(); got != http.StatusServiceUnavailable {
+		t.Errorf("ParkingBudgetStatus() = %d, want 503", got)
+	}
+	for _, tt := range []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"capacity exhausted", http.StatusServiceUnavailable, `actor "parked-a" unavailable: no worker has room for the actor`, true},
+		{"API unavailable", http.StatusServiceUnavailable, `actor "parked-a" unavailable`, false},
+		{"request timeout", http.StatusGatewayTimeout, `actor "parked-a" request timed out`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dataplane.IsRetryableParkingBudgetExhaustion(tt.status, tt.body); got != tt.want {
+				t.Errorf("IsRetryableParkingBudgetExhaustion(%d, %q) = %v, want %v", tt.status, tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAtenetDataplaneEgressPolicyDenial(t *testing.T) {
 	t.Run("envoy", func(t *testing.T) {
 		t.Setenv(AtenetDataplaneEnv, "")

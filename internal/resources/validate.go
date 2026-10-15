@@ -28,7 +28,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/volumepath"
 	"github.com/agent-substrate/substrate/pkg/sandboxclass"
 	"github.com/distribution/reference"
@@ -44,7 +44,7 @@ import (
 // ToGRPCStatusError turns validation errors into the InvalidArgument error an
 // RPC handler responds with. Callers check len(errs) > 0 first.
 //
-// TODO: Delete once atelet's AteomSupport server returns apierrors, and use
+// TODO: Delete once atelet's WorkerSupport server returns apierrors, and use
 // ToAPIError instead.
 func ToGRPCStatusError(errs field.ErrorList) error {
 	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
@@ -96,7 +96,7 @@ func IsValidResourceName(name string) bool {
 }
 
 // ValidateWorkerPodUID rejects a worker pod UID that could escape the host
-// path built from it: the ateom control socket (.../ateoms/<uid>/ateom.sock).
+// path built from it: the worker control socket (.../workers/<uid>/worker.sock).
 // Kubernetes pod UIDs are UUIDs, which are valid DNS-1123 labels, so a label
 // check accepts every legitimate value while rejecting separators and "..".
 func ValidateWorkerPodUID(workerPodUID string) error {
@@ -106,9 +106,9 @@ func ValidateWorkerPodUID(workerPodUID string) error {
 	return nil
 }
 
-// ValidateActorDirs checks that every directory atelet passes to ateom is
+// ValidateActorDirs checks that every directory atelet passes to worker is
 // set, absolute and clean.
-func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.ErrorList {
+func ValidateActorDirs(actorDirs *ateworkerpb.ActorDirs, fldPath *field.Path) field.ErrorList {
 	if actorDirs == nil {
 		return field.ErrorList{field.Required(fldPath, "")}
 	}
@@ -131,8 +131,8 @@ func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.
 // fidelity the calling sandbox runtime cannot serve. Each runtime passes the
 // levels it implements; anything else, including an unset fidelity, is
 // refused before the request touches the guest.
-func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ateompb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
-	if fidelity == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+func ValidateSnapshotFidelity(fidelity ateworkerpb.SnapshotFidelity, supported []ateworkerpb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
+	if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		return field.ErrorList{field.Required(fldPath, "")}
 	}
 	names := make([]string, 0, len(supported))
@@ -165,7 +165,7 @@ func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 }
 
 // ValidateRuntimeAssetPath ensures p is a regular file under root, with no symlinks
-// ateom runs these as root, so they must be assets atelet fetched into root
+// worker runs these as root, so they must be assets atelet fetched into root
 func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorList {
 	if p == "" {
 		return field.ErrorList{field.Required(fldPath, "")}
@@ -191,7 +191,7 @@ func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorLi
 
 // ValidateAssetHash ensures a sandbox asset's SHA-256 hash is exactly 64 hex
 // characters before it is used to build the on-disk asset path
-// (static-files/asset-<hash>) and, on a cache hit, returned for ateom to
+// (static-files/asset-<hash>) and, on a cache hit, returned for worker to
 // execute. Without this, a hash containing path separators or ".." could
 // point the cache-hit early return (and the download target) at an arbitrary
 // binary outside the static-files dir.

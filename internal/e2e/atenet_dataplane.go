@@ -141,10 +141,10 @@ func (agentGatewayAtenetDataplane) NewParkingObserver(context.Context) (ParkingO
 }
 
 func (agentGatewayAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body string) bool {
-	return status == http.StatusGatewayTimeout && strings.Contains(body, "request timed out")
+	return status == http.StatusServiceUnavailable && strings.Contains(body, "no worker has room for the actor")
 }
 
-func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusGatewayTimeout }
+func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
 
 func (agentGatewayAtenetDataplane) EgressUpgradeDeniedBody() string {
 	return "HTTP upgrades, including CONNECT, are denied for actor egress"

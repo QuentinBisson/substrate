@@ -63,6 +63,45 @@ func TestHelmAPIServerFlags(t *testing.T) {
 	}
 }
 
+func TestHelmPreviewGates(t *testing.T) {
+	for _, gates := range []string{"", "ExternalVolumes", "ALL"} {
+		t.Run("preview="+gates, func(t *testing.T) {
+			args := []string{"template", "test", "../../charts/substrate", "-n", "custom"}
+			if gates != "" {
+				args = append(args, "--set", "preview[0]="+gates)
+			}
+			out, err := exec.CommandContext(t.Context(), "helm", args...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("render: %v\n%s", err, out)
+			}
+			found := map[string]bool{"ate-api-server": false, "ate-controller": false, "atelet": false}
+			for _, doc := range strings.Split(string(out), "\n---\n") {
+				var workload appsv1.Deployment
+				if err := yaml.Unmarshal([]byte(doc), &workload); err != nil {
+					t.Fatal(err)
+				}
+				if workload.Kind != "Deployment" && workload.Kind != "DaemonSet" {
+					continue
+				}
+				for _, container := range workload.Spec.Template.Spec.Containers {
+					if _, ok := found[container.Name]; !ok {
+						continue
+					}
+					found[container.Name] = true
+					if !slices.Contains(container.Args, "--preview="+gates) {
+						t.Errorf("%s args = %v, want --preview=%s", container.Name, container.Args, gates)
+					}
+				}
+			}
+			for name, present := range found {
+				if !present {
+					t.Errorf("missing %s container", name)
+				}
+			}
+		})
+	}
+}
+
 func TestHelmPostgresCertificates(t *testing.T) {
 	for _, tc := range []struct {
 		release, namespace     string
@@ -273,7 +312,7 @@ func TestHelmObjectStorePlugins(t *testing.T) {
 						t.Error("API server still receives ATE_STORAGE_BACKEND")
 					}
 				}
-				if mode == "node" && (!slices.Contains(plugin.Args, "--root=/var/lib/ate") || !slices.ContainsFunc(plugin.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == "run-ateom" && m.MountPath == "/var/lib/ate" })) {
+				if mode == "node" && (!slices.Contains(plugin.Args, "--root=/var/lib/ate") || !slices.ContainsFunc(plugin.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == "ate-base" && m.MountPath == "/var/lib/ate" })) {
 					t.Error("node plugin cannot access snapshot files")
 				}
 				found[mode] = true

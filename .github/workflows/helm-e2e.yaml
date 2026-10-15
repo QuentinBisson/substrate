@@ -26,6 +26,8 @@ jobs:
       VERSION: helm-e2e
       E2E_ATENET_DATAPLANE: agentgateway
       E2E_CREDENTIAL_PROVIDER: "1"
+      # Retain external-volume coverage after the preview gate is introduced.
+      ATE_PREVIEW: ALL
       ARTIFACTS: ${{ github.workspace }}/_artifacts
     steps:
     - name: Checkout
@@ -97,6 +99,7 @@ jobs:
           --set postgres.clientCertificates.enabled=true \
           --set image.registry=localhost:5001 \
           --set image.tag=helm-e2e \
+          --set 'preview[0]=ALL' \
           --set 'atelet.extraArgs[0]=--localhost-registry-replacement=kind-registry:5000' \
           --set otel.endpoint=http://opentelemetry-collector.otel-system.svc:4317 \
           --wait --timeout=10m
@@ -124,20 +127,20 @@ jobs:
       # tests keep a stable trust bundle and gateway signing certificate.
       env:
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/helm-gvisor.xml
-      run: hack/run-e2e-kind.sh -v -skip '^(TestActorIdentity_|TestActorEgressCredentialInjection$)' -args --no-color
+      run: hack/run-e2e-kind.sh -v -skip '^(TestActorIdentity_|TestActorEgressCredentialInjection$)' -args --no-color --preview="${ATE_PREVIEW}"
     - name: Run E2E tests (micro-VM)
       env:
         E2E_SANDBOX_CLASS: microvm
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/helm-microvm.xml
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/demo -v -args --no-color
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/demo -v -args --no-color --preview="${ATE_PREVIEW}"
     - name: Run E2E tests (egress credential injection)
       env:
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/helm-egress-credentials.xml
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color --preview="${ATE_PREVIEW}"
     - name: Run E2E tests (identity and trust rotation)
       env:
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/helm-identity.xml
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/identity -v -args --no-color
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/identity -v -args --no-color --preview="${ATE_PREVIEW}"
     - name: Require every lane to have run tests
       if: always()
       run: |

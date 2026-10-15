@@ -56,6 +56,7 @@ See `values.yaml` for the full set; the important keys:
 | `postgres.ownerConnectionStringSecretRef` | `substrate-postgres-owner` | Read the owner connection from a pre-created Secret |
 | `postgres.readWriteRole` | `substrate_readwrite` | Role assumed by read/write connections |
 | `postgres.ownerRole` | `substrate_owner` | Role assumed by owner connections |
+| `preview` | `[]` | Preview gates for the API server, controller and workers, and atelet; set `[ExternalVolumes]` to enable external volume APIs and mounts |
 | `postgres.schema` | `substrate` | Store the Substrate tables in this PostgreSQL schema |
 | `postgres.clientCertificates.enabled` | `false` | Project separate owner and runtime login certificates into the API server |
 | `<component>.resources` | see `values.yaml` | Requests and limits for each container, e.g. `ateApi.resources` and `atenetRouter.agentgateway.resources` |
@@ -75,10 +76,16 @@ See `values.yaml` for the full set; the important keys:
 | `otel.traces.samplingRatio` | `0.01` | Fraction of parentless requests that start a trace, applied to the Go components and the router |
 | `otel.metrics.enabled` | `true` | Set to `false` to disable OTLP metrics push; Prometheus scraping remains available |
 | `otel.metrics.endpoint` | `""` | OTLP endpoint for metrics, overriding `otel.endpoint` |
-| `otel.logs.enabled` | `true` | Enable OTLP actor events from ateapi and the ateoms, plus the router access log. Actor events go to stdout when OTLP logs are disabled |
+| `otel.logs.enabled` | `true` | Enable OTLP actor events from ateapi and the ateworkers, plus the router access log. Actor events go to stdout when OTLP logs are disabled |
 | `otel.logs.endpoint` | `""` | OTLP endpoint for logs, overriding `otel.endpoint` |
 
 ## Upgrading sandbox and snapshot configuration
+
+External volumes now require `preview: [ExternalVolumes]` and a client that opts
+in to the same gate (for `kubectl ate`, pass `--preview=ExternalVolumes`).
+Actor and ActorTemplate container resource limits must include positive CPU and
+memory values. Worker images are now named `ateworker-gvisor` and
+`ateworker-microvm`; update custom WorkerPools and image mirrors accordingly.
 
 Upgrade `substrate-crds` before the application chart. Custom `SandboxConfig`
 resources now put assets and `pauseImage` under `spec.versions[]`, with a named
@@ -112,7 +119,7 @@ API server or atelet itself; select it through `atelet.storageBackend`.
 RustFS is wired automatically. Private S3 asset URLs must use `s3://`.
 
 The default gVisor config now uses the 2026-10-10 nightly (`v3`) for split
-filesystem checkpoints. Upgrade the sandbox config together with ateom-gvisor;
+filesystem checkpoints. Upgrade the sandbox config together with ateworker-gvisor;
 custom configs must pin a release with the same checkpoint support.
 
 The chart now denies ingress to the control-plane namespace by default and

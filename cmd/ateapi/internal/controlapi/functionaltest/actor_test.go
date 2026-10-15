@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -111,8 +112,10 @@ func TestCreateActor_Success(t *testing.T) {
 }
 
 func TestCreateActor_WithExternalVolumes(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-create-ext-vols")
-	tc := setupTest(t, ns)
+	tc := setupPreviewTest(t, ns)
 	defer tc.cleanup()
 
 	volumes := []*ateapipb.Volume{
@@ -168,6 +171,84 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 	}
 }
 
+// TestCreateActor_ExternalVolumesWithoutOptIn checks that a client which did
+// not opt in to preview features cannot create an Actor whose template has
+// external volumes, even though the server enables the gate.
+func TestCreateActor_ExternalVolumesWithoutOptIn(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
+	ns := namespaceForTest("ns-create-ext-vols-no-opt-in")
+	tc := setupPreviewTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapipb.Volume{{
+			Name:                   "ext-vol-1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "10Gi"},
+		}},
+		[]*ateapipb.VolumeMount{{Name: "ext-vol-1", MountPath: "/data"}})
+
+	_, err := tc.noOptInClient.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "vol-actor-1"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateActor error = %v, want InvalidArgument", err)
+	}
+	if !strings.Contains(err.Error(), preview.Header) {
+		t.Errorf("CreateActor error = %v, want it to mention %s", err, preview.Header)
+	}
+}
+
+// TestActorLifecycle_ExternalVolumesWithoutOptIn checks that a client which
+// did not opt in to preview features can still resume, suspend and delete an
+// Actor with external volumes: those requests carry no preview fields, and the
+// volume state they change is written by workflows on the system's behalf.
+func TestActorLifecycle_ExternalVolumesWithoutOptIn(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
+	ns := namespaceForTest("ns-lifecycle-ext-vols-no-opt-in")
+	tc := setupPreviewTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapipb.Volume{{
+			Name:                   "data-vol",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "fast", Capacity: "20Gi"},
+		}},
+		[]*ateapipb.VolumeMount{{Name: "data-vol", MountPath: "/mnt/data"}})
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-no-opt-in"}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: actorRef.Name},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	_, err := tc.noOptInClient.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	if _, err := tc.noOptInClient.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+
+	if _, err := tc.noOptInClient.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after delete err = %v, want NotFound", err)
+	}
+}
+
 // TestCreateActor_TemplateNotFound tests that creating an actor with a non-existent template fails with FailedPrecondition.
 func TestCreateActor_TemplateNotFound(t *testing.T) {
 	ns := namespaceForTest("ns-create-notfound")
@@ -199,6 +280,7 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
 			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
+			Resources:      resources.CPUMemory(1000, 512<<20),
 		},
 	}); err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
@@ -312,8 +394,10 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 }
 
 func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-snapshot-external-volume")
-	tc := setupTest(t, ns)
+	tc := setupPreviewTest(t, ns)
 	defer tc.cleanup()
 	ensureDefaultGvisorSandboxConfig(t, tc)
 	template, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
@@ -333,6 +417,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 					Capacity: "1Gi", StorageClassName: "standard",
 				},
 			}},
+			Resources: resources.CPUMemory(1000, 512<<20),
 		},
 	})
 	if err != nil {
@@ -769,6 +854,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 						Volumes:        tmpl.volumes,
 						SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
 						SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: tmpl.configName},
+						Resources:      resources.CPUMemory(1000, 512<<20),
 					},
 				}); err != nil {
 					t.Fatalf("CreateActorTemplate %s failed: %v", name, err)
@@ -1403,6 +1489,8 @@ func (f *failingVolumePlugin) DeleteVolume(ctx context.Context, volumeID string)
 }
 
 func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-delete-multivol-fail")
 	plugin := &failingVolumePlugin{}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -1478,6 +1566,8 @@ func (r *retryDeleteVolumePlugin) DeleteVolume(ctx context.Context, volumeID str
 // 5. Retries DeleteActor, which re-attempts volume deletion and cleans up the actor from the store.
 // 6. Confirms GetActor returns NotFound.
 func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-delete-vol-retry")
 	plugin := &retryDeleteVolumePlugin{failDelete: true}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -1620,8 +1710,10 @@ func TestValidation_Actor(t *testing.T) {
 }
 
 func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-lifecycle-ext-vols")
-	tc := setupTest(t, ns)
+	tc := setupPreviewTest(t, ns)
 	defer tc.cleanup()
 
 	volumes := []*ateapipb.Volume{
@@ -1763,6 +1855,8 @@ func (f *partialFailVolumePlugin) DeleteVolume(ctx context.Context, volumeID str
 // successfully created volumes are saved, the actor remains in ACTOR_STATE_SUSPENDED,
 // and that calling DeleteActor on the suspended actor cleans up all partially created volumes.
 func TestResumeActor_VolumeCreationFailure(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-resume-vol-fail")
 	plugin := &partialFailVolumePlugin{}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -1905,6 +1999,8 @@ func (r *retrySuccessVolumePlugin) DeleteVolume(ctx context.Context, volumeID st
 // TestResumeActor_VolumeCreationRetrySuccess tests that when volume provisioning fails on the first ResumeActor call,
 // a subsequent call to ResumeActor retries provisioning only the pending volumes and succeeds.
 func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-resume-vol-retry")
 	plugin := &retrySuccessVolumePlugin{}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -2059,6 +2155,8 @@ func (a *attachFailVolumePlugin) DeleteVolume(ctx context.Context, volumeID stri
 // and provisioned volumes intact, and that a subsequent call to ResumeActor re-attempts volume attachment
 // and successfully transitions the actor to ACTOR_STATE_RUNNING.
 func TestResumeActor_VolumeAttachFailureAndRetry(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-resume-vol-attach-retry")
 	plugin := &attachFailVolumePlugin{failUntil: 1}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -2161,6 +2259,8 @@ func TestResumeActor_VolumeAttachFailureAndRetry(t *testing.T) {
 // calling DeleteActor without any_state is rejected because the actor is in ACTOR_STATE_RESUMING,
 // but calling DeleteActor with any_state=true succeeds, cleaning up worker assignment and volumes.
 func TestResumeActor_VolumeAttachFailure_DeleteActor(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-resume-vol-attach-del")
 	plugin := &attachFailVolumePlugin{failUntil: 100}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -2315,6 +2415,8 @@ func (m *multiVolAttachPlugin) DeleteVolume(ctx context.Context, volumeID string
 // 6. Verifies ResumeActor succeeds and actor transitions to ACTOR_STATE_RUNNING.
 // 7. Cleans up by suspending and deleting the actor.
 func TestResumeActor_MultiVolumePartialAttachFailure_Retry(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-resume-multivol-attach-retry")
 	plugin := newMultiVolAttachPlugin("vol2", 1)
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -2485,6 +2587,8 @@ func (d *detachFailVolumePlugin) DeleteVolume(ctx context.Context, volumeID stri
 // 6. Verifies actor transitions to ACTOR_STATE_SUSPENDED and worker assignment is cleared.
 // 7. Cleans up by deleting the actor.
 func TestSuspendActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-suspend-vol-detach-retry")
 	plugin := &detachFailVolumePlugin{failUntil: 1}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -2595,6 +2699,8 @@ func TestSuspendActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 // 5. Resets the plugin to allow detachment, then calls DeleteActor with AnyState=true.
 // 6. Verifies the actor is deleted and GetActor returns NotFound.
 func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-suspend-vol-detach-del")
 	plugin := &detachFailVolumePlugin{failUntil: 100}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -2694,6 +2800,8 @@ func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
 // 4. Calls ResumeActor from pause; verifies volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
 // 5. Cleans up by suspending and deleting the actor.
 func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-pause-vol-lifecycle")
 	plugin := &attachFailVolumePlugin{}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -2820,6 +2928,8 @@ func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 // 6. Verifies actor state transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
 // 7. Cleans up by deleting the actor with AnyState=true.
 func TestPauseActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
 	ns := namespaceForTest("ns-pause-vol-detach-retry")
 	plugin := &detachFailVolumePlugin{failUntil: 1}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -3013,11 +3123,10 @@ func TestResumeActor(t *testing.T) {
 		Status: &ateapipb.WorkerStatus{
 			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			// Only the ceiling the worker reported.
-			Capacity: &ateapipb.WorkerResources{Actors: 1},
-			// All a listing reports of the assignments. The actor declares
-			// no compute limits, so it registers as one actor and nothing
-			// else.
-			Allocated: &ateapipb.WorkerResources{Actors: 1},
+			Capacity: &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
+			// All a listing reports of the assignments: one actor and the
+			// compute its template declares.
+			Allocated: &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
 		},
 	}
 
@@ -3110,6 +3219,7 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 			WorkerSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
+			Resources: resources.CPUMemory(1000, 512<<20),
 		},
 	})
 	if err != nil {

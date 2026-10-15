@@ -74,6 +74,7 @@ spec:
         resources:
 {{ toYaml .Values.ateController.resources | indent 10 }}
         args:
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
         # The atecontroller binary defaults --ateapi-conn-spec to
         # dns:///api.ate-system.svc:443, which is correct only for the
         # canonical render (release name "substrate" in namespace
