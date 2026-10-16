@@ -187,3 +187,13 @@ Upgrade clients and components together: upstream now uses the
 `go.ate.dev/substrate` Go module, and the worker protocol includes dynamic
 runtime registration and the unified suspend/pause workflow. Custom worker
 images and integrations must use the matching API version.
+
+Every checkpoint now requires an object-storage URI, including a pause that
+keeps its snapshot local. Ensure actor templates have a usable
+`snapshotConfig.storageLocation` before pausing them. Upgrade the API server,
+atelet, and workers together for the checkpoint validation and per-actor
+sandbox asset paths.
+
+The `ate-idp-server` binary serves actor JWT discovery and public signing keys
+over HTTPS. It is not deployed by this chart yet; upgrading the chart does not
+expose a discovery endpoint.
