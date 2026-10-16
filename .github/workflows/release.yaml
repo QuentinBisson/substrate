@@ -144,7 +144,7 @@ jobs:
             for arch in amd64 arm64; do
               CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" go build \
                 -trimpath \
-                -ldflags="-s -w -X=github.com/agent-substrate/substrate/internal/version.Version=${VERSION}" \
+                -ldflags="-s -w -X=go.ate.dev/substrate/internal/version.Version=${VERSION}" \
                 -o "dist/kubectl-ate-${os}-${arch}" \
                 ./cmd/kubectl-ate
             done

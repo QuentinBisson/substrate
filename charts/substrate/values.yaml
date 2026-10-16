@@ -107,6 +107,12 @@ objectStorePlugin:
 
 # Additional arguments appended to the ateapi defaults.
 ateApi:
+  logLevel: info
+  authorization:
+    enabled: true
+    # Empty defaults to the release's shared ate-client principal. Use explicit
+    # operator principals for shared installs; see docs/authorization.md.
+    bootstrapOwners: []
   # Defaults to the in-cluster IdP URL; set a stable issuer for external consumers.
   actorJWTIssuer: ""
   extraArgs: []

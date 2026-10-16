@@ -15,6 +15,8 @@
 suite: Control plane integration
 templates:
 - ate-api-server.yaml
+- ate-api-config.yaml
+- role.yaml
 - atelet.yaml
 - k8s-credential-provider.yaml
 - ate-system-networkpolicies.yaml
@@ -161,3 +163,78 @@ tests:
       value:
       - protocol: TCP
         port: api
+
+- it: supplies the required API config and bootstraps the release client
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --experimental-enable-authz=true
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --authz-bootstrap-owners=system:serviceaccount:custom-system:custom-ate-client
+  - contains:
+      path: spec.template.spec.containers[0].volumeMounts
+      content:
+        name: api-config
+        mountPath: /run/apiconfig.ate.dev
+        readOnly: true
+  - contains:
+      path: spec.template.spec.volumes
+      content:
+        name: api-config
+        configMap:
+          name: custom-ate-api-config
+- it: configures operator ownership even with runtime enforcement disabled
+  template: ate-api-server.yaml
+  set:
+    ateApi.authorization.enabled: false
+    ateApi.authorization.bootstrapOwners:
+    - system:serviceaccount:operators:admin
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --experimental-enable-authz=false
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --authz-bootstrap-owners=system:serviceaccount:operators:admin
+- it: configures API logging in textproto
+  template: ate-api-config.yaml
+  set:
+    ateApi.logLevel: debug
+  asserts:
+  - equal:
+      path: metadata.name
+      value: custom-ate-api-config
+  - equal:
+      path: data["apiconfig.textproto"]
+      value: |
+        logging: { level: "debug" }
+- it: rejects an invalid API log level
+  template: ate-api-config.yaml
+  set:
+    ateApi.logLevel: verbose
+  asserts:
+  - failedTemplate:
+      errorMessage: ateApi.logLevel must be debug, info, warn, or error
+- it: lets the controller provision worker service accounts
+  template: role.yaml
+  documentSelector:
+    path: kind
+    value: ClusterRole
+  asserts:
+  - contains:
+      path: rules
+      content:
+        apiGroups: [""]
+        resources: [serviceaccounts]
+        verbs: [create, patch]

@@ -21,15 +21,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -821,6 +822,10 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 			persistence := newTestPersistence(t)
 			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation})
 			w, _ := newWireCaptureWorkflow(t, persistence)
+			// Without a watch running, finalization must notify the scheduler itself.
+			w.workerCache = workercache.New(nil, 0)
+			var observed *ateapipb.Worker
+			w.workerCache.AddHandler(func(worker *ateapipb.Worker) { observed = worker })
 			actor := &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
 				ActorTemplate: suspendTestTemplateRef(),
@@ -852,6 +857,23 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 			stored := firstAssignment(t, persistence, wireTestAssignment().GetWorker().GetName())
 			if released := stored == nil; released != tt.wantReleased {
 				t.Errorf("worker released = %t, want %t (assignment: %v)", released, tt.wantReleased, stored)
+			}
+			if !tt.wantReleased {
+				if observed != nil {
+					t.Error("worker cache notified even though no assignment was released")
+				}
+				return
+			}
+
+			if observed == nil {
+				t.Fatal("worker cache was not notified of the released capacity")
+			}
+			released, err := persistence.GetWorker(ctx, wireTestAssignment().GetWorker().GetName())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(released, observed, protocmp.Transform()); diff != "" {
+				t.Errorf("cached worker differs from released worker (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -1315,18 +1337,10 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 	}
 }
 
-// TestSuspendAndPause_FinalizeWithoutAssignment pins where the two finalize
-// steps differ when the DeleteWorker workflow crashes the actor, clearing its
-// worker assignment, between the atelet call and finalize. Both sides pin
-// bugs tracked in #2676: the suspend commits SUSPENDED over the crash, and
-// the pause keeps the crash but returns OK for an actor left CRASHED. The fix
-// changes the sync wantState to CRASHED and both codes to FailedPrecondition,
-// replacing the err != nil fatal below.
+// TestSuspendAndPause_FinalizeWithoutAssignment verifies that both workflows
+// preserve an out-of-band crash and return FailedPrecondition when the crash
+// clears the worker assignment between the atelet call and finalize's read.
 func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
-	wantState := map[string]ateapipb.ActorState{
-		"sync":  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		"async": ateapipb.ActorState_ACTOR_STATE_CRASHED,
-	}
 	for _, mode := range suspendModes {
 		t.Run(mode.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -1343,21 +1357,29 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 					WorkerAssignment: wireTestAssignment(),
 				},
 			})
+			// What a worker delete or the syncer commits: CRASHED with the
+			// crash recorded and the assignment cleared, landing after the
+			// atelet call and before finalize re-reads the actor.
+			originalCrash := newActorCrash(ateattr.OperationDelete, "original crash reason")
 			updateDuringCheckpoint(t, atelet, persistence, actorRef, func(s *ateapipb.ActorStatus) {
 				s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+				s.Crash = originalCrash
 				s.WorkerAssignment = nil
 			})
 
 			returned, err := mode.run(w, ctx, actorRef)
-			// #2676: both modes should return FailedPrecondition here.
-			if err != nil {
-				t.Fatalf("%s: %v", mode.name, err)
+			if got := apierror.Code(err); got != codes.FailedPrecondition {
+				t.Fatalf("%s: code = %v (err %v), want FailedPrecondition", mode.name, got, err)
 			}
-			if got := returned.GetStatus().GetState(); got != wantState[mode.name] {
-				t.Errorf("returned state = %v, want %v", got, wantState[mode.name])
+			if returned != nil {
+				t.Errorf("%s: returned actor = %v, want nil", mode.name, returned)
 			}
-			if got := mustReadActor(t, ctx, persistence, actorRef).GetStatus().GetState(); got != wantState[mode.name] {
-				t.Errorf("stored state = %v, want %v", got, wantState[mode.name])
+			stored := mustReadActor(t, ctx, persistence, actorRef)
+			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Errorf("%s: stored state = %v, want CRASHED", mode.name, got)
+			}
+			if got, want := stored.GetStatus().GetCrash().GetMessage(), originalCrash.GetMessage(); got != want {
+				t.Errorf("%s: crash message = %q, want %q kept", mode.name, got, want)
 			}
 		})
 	}

@@ -38,6 +38,13 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - patch
+- apiGroups:
   - apps
   resources:
   - deployments

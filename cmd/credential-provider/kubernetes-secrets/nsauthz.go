@@ -19,7 +19,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"sigs.k8s.io/yaml"

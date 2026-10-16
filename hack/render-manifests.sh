@@ -62,15 +62,15 @@ helm template substrate "${CHART_DIR}" \
   --set auth.mode=mtls \
   --set postgres.clientCertificates.enabled=true \
   --set createNamespace=true \
-  --set image.registry=ko://github.com \
-  --set image.repository=agent-substrate/substrate/cmd \
+  --set image.registry=ko://go.ate.dev \
+  --set image.repository=substrate/cmd \
   --set image.tag="<none>" \
   > "${TMP_DIR}/all.yaml"
 helm template substrate-podcert "${ROOT}/charts/substrate-podcert" \
   --namespace podcertificate-controller-system \
   --set createNamespace=true \
-  --set image.registry=ko://github.com \
-  --set image.repository=agent-substrate/substrate/cmd \
+  --set image.registry=ko://go.ate.dev \
+  --set image.repository=substrate/cmd \
   --set image.tag="<none>" \
   >> "${TMP_DIR}/all.yaml"
 
