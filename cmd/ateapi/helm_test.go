@@ -16,7 +16,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/agent-substrate/substrate/pkg/postgressetup"
+	"go.ate.dev/substrate/pkg/postgressetup"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"os"

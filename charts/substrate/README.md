@@ -69,6 +69,9 @@ See `values.yaml` for the full set; the important keys:
 | `ateApi.actorJWTIssuer` | `https://idp.<namespace>.svc` | Issuer placed in actor JWTs; set a stable URL reachable by relying parties |
 | `objectStorePlugin.extraEnv` | `[]` | Object storage credentials/settings shared by both object-store plugins |
 | `objectStorePlugin.control.resources` / `objectStorePlugin.node.resources` | see `values.yaml` | Resources for the API and node object-store sidecars |
+| `ateApi.logLevel` | `info` | API server log level in its mounted config; one of `debug`, `info`, `warn`, or `error` |
+| `ateApi.authorization.enabled` | `true` | Enforce API authorization |
+| `ateApi.authorization.bootstrapOwners` | `[]` | Global owners; empty defaults to the release's shared `ate-client` ServiceAccount |
 | `ateApi.extraArgs` | `[]` | Additional command-line arguments appended to the ateapi defaults |
 | `otel.endpoint` | `""` | Set to an OTLP endpoint to export traces, metrics, the actor lifecycle events and the router access log |
 | `otel.traces.enabled` | `true` | Set to `false` to export no traces from the router; the Go components do not honor this yet |
@@ -166,3 +169,21 @@ Create both group roles and all grants before installation, then set
 roles and table schemas for separate installs sharing one database. Give each
 install separate logins and grant each login membership only in its install's
 roles.
+
+## Upgrading API configuration and authorization
+
+The API server now requires `--config-file`. The chart mounts its generated
+`ate-api-config` ConfigMap and rolls the API pods when `ateApi.logLevel` changes.
+Replace `--log-level` in `ateApi.extraArgs` with `ateApi.logLevel`.
+
+API authorization is enabled by default, matching `ate-setup`. The release's
+shared `ate-client` ServiceAccount is a bootstrap global owner so demos and
+CLI access work. For shared installs, set `ateApi.authorization.bootstrapOwners`
+to your operators' own principals and grant tenant access with `kubectl ate
+create access-policy`; anyone who can mint the shared client's token otherwise has
+global owner access. See [authorization](../../docs/authorization.md).
+
+Upgrade clients and components together: upstream now uses the
+`go.ate.dev/substrate` Go module, and the worker protocol includes dynamic
+runtime registration and the unified suspend/pause workflow. Custom worker
+images and integrations must use the matching API version.

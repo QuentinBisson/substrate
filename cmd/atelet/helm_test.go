@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"

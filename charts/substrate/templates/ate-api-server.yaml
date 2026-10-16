@@ -75,6 +75,7 @@ spec:
       labels:
         app: ate-api-server
       annotations:
+        checksum/api-config: {{ .Values.ateApi.logLevel | sha256sum }}
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
     spec:
@@ -119,6 +120,9 @@ spec:
         - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
         - "--grpc-listen-addr=0.0.0.0:443"
         - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+        - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+        - {{ printf "--experimental-enable-authz=%t" .Values.ateApi.authorization.enabled | quote }}
+        - {{ printf "--authz-bootstrap-owners=%s" (join "," (.Values.ateApi.authorization.bootstrapOwners | default (list (printf "system:serviceaccount:%s:%s" .Release.Namespace (include "substrate.fullname" (list "ate-client" .)))))) | quote }}
         - "--authentication-config=/etc/ateapi/authentication/authentication.yaml"
         - "--postgres-read-write-connection-string=@env"
         - "--postgres-owner-connection-string=@env"
@@ -182,6 +186,7 @@ spec:
 {{- if .Values.postgres.clientCertificates.enabled }}
         - { name: postgres, mountPath: /run/postgres.podcert.ate.dev, readOnly: true }
 {{- end }}
+        - { name: api-config, mountPath: /run/apiconfig.ate.dev, readOnly: true }
         - { name: authentication-config, mountPath: /etc/ateapi/authentication, readOnly: true }
         ports:
         - containerPort: 443
@@ -238,6 +243,9 @@ spec:
               name: actor-id-ca-pool
               items:
               - { key: pool, path: pool.json }
+      - name: api-config
+        configMap:
+          name: {{ include "substrate.fullname" (list "ate-api-config" .) }}
       - name: authentication-config
         configMap:
           name: ate-api-authentication

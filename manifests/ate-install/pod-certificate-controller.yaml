@@ -151,7 +151,7 @@ spec:
     spec:
       containers:
       - name: controller
-        image: ko://github.com/agent-substrate/substrate/cmd/podcertcontroller
+        image: ko://go.ate.dev/substrate/cmd/podcertcontroller
         resources:
           limits:
             cpu: 500m

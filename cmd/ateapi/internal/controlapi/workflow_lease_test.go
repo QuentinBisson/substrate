@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 type leaseStore struct{ store.Interface }

@@ -29,9 +29,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestKubernetesCredentialInjection uses the Helm values in values.yaml, real
@@ -60,7 +60,7 @@ func TestKubernetesCredentialInjection(t *testing.T) {
 
 	e2e.DeployServerPod(t, ctx, e2e.ServerPod{
 		Name: "credential-origin", Namespace: namespace,
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http", "--authorization-file=/run/token/token"},
 		Port:       80, TargetPort: 8080,
 		Volumes: []corev1.Volume{
