@@ -239,7 +239,7 @@ func TestHelmObjectStorePlugins(t *testing.T) {
 	for _, external := range []bool{false, true} {
 		t.Run(fmt.Sprintf("external=%t", external), func(t *testing.T) {
 			args := []string{"template", "test", "../../charts/substrate", "-n", "custom"}
-			issuer := "https://idp.custom.svc"
+			issuer := "https://test-idp.custom.svc"
 			if external {
 				issuer = "https://actors.example.com"
 				args = append(args, "--set", "rustfs.enabled=false", "--set", "atelet.storageBackend=gcs",

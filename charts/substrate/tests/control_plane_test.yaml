@@ -75,6 +75,12 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].ports
       content:
+        name: grpc
+        containerPort: 21998
+        hostPort: 21998
+  - contains:
+      path: spec.template.spec.containers[0].ports
+      content:
         name: prometheus
         containerPort: 9090
         protocol: TCP
@@ -90,6 +96,12 @@ tests:
   - equal:
       path: spec.template.spec.containers[0].livenessProbe.httpGet.port
       value: health
+  - contains:
+      path: spec.template.spec.tolerations
+      content:
+        key: cloud.google.com/compute-class
+        operator: Exists
+        effect: NoSchedule
 - it: probes the credential provider on its health listener
   template: k8s-credential-provider.yaml
   documentSelector:

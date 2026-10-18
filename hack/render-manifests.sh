@@ -30,6 +30,7 @@ CHART_DIR="${ROOT}/charts/substrate"
 CHECK_MODE="false"
 PRESERVED_FILES=(
   ate-api-server.yaml
+  ate-idp-server.yaml
   ate-controller.yaml
   ate-otel-config.yaml
   ate-system-namespace.yaml
@@ -147,6 +148,7 @@ fi
 mkdir -p "${OUT_DIR}"
 find "${OUT_DIR}" -maxdepth 1 -type f -name '*.yaml' \
   ! -name 'ate-api-server.yaml' \
+  ! -name 'ate-idp-server.yaml' \
   ! -name 'ate-controller.yaml' \
   ! -name 'ate-otel-config.yaml' \
   ! -name 'ate-system-namespace.yaml' \

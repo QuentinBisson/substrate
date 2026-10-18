@@ -45,8 +45,9 @@ spec:
       openAPIV3Schema:
         description: |-
           SandboxConfig is cluster-scoped configuration describing the versions of the
-          sandbox binaries for a sandbox runtime family. It is referenced by an
-          ActorTemplate's sandbox_config.config_name (required) and decouples sandbox
+          sandbox binaries for a sandbox runtime family. It is referenced by a
+          WorkerPool's spec.sandboxClasses[].configRef (or resolved via the
+          sandboxconfig.ate.dev/is-class-default annotation) and decouples sandbox
           binary selection from the workload definition.
         properties:
           apiVersion:
@@ -79,9 +80,9 @@ spec:
               sandboxClass:
                 default: gvisor
                 description: |-
-                  sandboxClass is the sandbox runtime family this config applies to. An
-                  ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
-                  sandbox_config.sandbox_class.
+                  sandboxClass is the sandbox runtime family this config applies to. A
+                  WorkerPool only uses SandboxConfigs whose sandboxClass matches the entry
+                  in its spec.sandboxClasses.
                 enum:
                 - gvisor
                 - microvm
@@ -129,11 +130,10 @@ spec:
                         architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
                         asset names are interpreted by the sandbox backend: gVisor expects a
                         "gvisor" asset (the release's gvisor.tar.zstd, which atelet extracts so
-                        the gvisor-bin/ helpers sit next to runsc; a legacy bare-binary "runsc"
-                        asset is still accepted); a micro-VM backend expects several (e.g.
-                        "cloud-hypervisor", "kata-kernel", "kata-image"). The schema is
-                        intentionally generic; per-class requirements are enforced by a
-                        ValidatingAdmissionPolicy.
+                        the gvisor-bin/ helpers sit next to runsc); a micro-VM backend expects
+                        several (e.g. "cloud-hypervisor", "kata-kernel", "kata-image"). The
+                        schema is intentionally generic; per-class requirements are enforced by
+                        a ValidatingAdmissionPolicy.
                       type: object
                     name:
                       description: |-
