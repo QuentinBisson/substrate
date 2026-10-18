@@ -124,6 +124,9 @@ ateApi:
       cpu: "2"
       memory: 1Gi
 
+ateIdpServer:
+  resources: {}
+
 ateController:
   resources:
     requests:

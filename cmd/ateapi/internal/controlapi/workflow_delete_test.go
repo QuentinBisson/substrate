@@ -334,7 +334,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	objects := objectstoretest.New()
-	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, time.Minute, objectstoreplugintest.ControlClient(objects))
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, nil, "", nil, time.Minute, objectstoreplugintest.ControlClient(objects))
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -490,7 +490,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				}
 				return status.Error(codes.Unavailable, "worker pod is gone")
 			}
-			if _, err := actorWorkflow.SuspendActor(ctx, actorRef); apierror.Code(err) != codes.Unavailable {
+			if _, err := actorWorkflow.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.Unavailable {
 				t.Fatalf("SuspendActor err = %v, want Unavailable from the failed checkpoint", err)
 			}
 

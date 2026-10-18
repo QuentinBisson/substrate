@@ -36,6 +36,7 @@ type AtenetDataplane interface {
 	ParkingBudgetStatus() int
 	IsEgressPolicyDenied(status int, body string) bool
 	EgressUpgradeDeniedBody() string
+	EgressConnectDeniedResponse() (int, string)
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
 	ScrapeMetrics(context.Context) (string, error)
@@ -79,6 +80,10 @@ func (envoyAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServic
 
 func (envoyAtenetDataplane) EgressUpgradeDeniedBody() string {
 	return "WebSocket egress is not supported"
+}
+
+func (envoyAtenetDataplane) EgressConnectDeniedResponse() (int, string) {
+	return http.StatusForbidden, "CONNECT egress is not supported"
 }
 
 func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
@@ -148,6 +153,10 @@ func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.Statu
 
 func (agentGatewayAtenetDataplane) EgressUpgradeDeniedBody() string {
 	return "HTTP upgrades, including CONNECT, are denied for actor egress"
+}
+
+func (agentGatewayAtenetDataplane) EgressConnectDeniedResponse() (int, string) {
+	return http.StatusMethodNotAllowed, "method not allowed"
 }
 
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {

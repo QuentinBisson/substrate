@@ -43,7 +43,6 @@ type RPCService struct {
 	persistence           serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
-	sandboxConfigLister   listersv1alpha1.SandboxConfigLister
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	actorWorkflow         *ActorWorkflow
 	workerWorkflow        *WorkerWorkflow
@@ -78,6 +77,7 @@ type VolumePluginRegistry interface {
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
+	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
@@ -96,7 +96,6 @@ func NewRPCService(
 		impl:                  impl,
 		persistence:           persistence,
 		workerCache:           workerCache,
-		sandboxConfigLister:   sandboxConfigLister,
 		csiDriverConfigLister: csiDriverConfigLister,
 		dialer:                dialer,
 		instruments:           instruments,
@@ -106,7 +105,7 @@ func NewRPCService(
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, actorWorkflowDeadline, objectStorePlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, actorWorkflowDeadline, objectStorePlugin)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }

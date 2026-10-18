@@ -217,3 +217,23 @@ spec:
       port: stats
     - protocol: TCP
       port: readiness
+---
+# ate-idp-server serves the actor JWT discovery document and key set. Relying
+# parties fetch them from pods in any namespace and, through an Ingress or a
+# load balancer, from outside the cluster. Both documents are public, so the
+# port admits any source.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-idp-server" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: ate-idp-server
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: https
