@@ -44,6 +44,11 @@ get the same prefixed name that this subchart's own templates render.
 {{- end -}}
 {{- end -}}
 
+{{/* The API signs actor JWTs with the issuer served by the discovery endpoint. */}}
+{{- define "substrate.actorJWTIssuer" -}}
+{{- .Values.ateApi.actorJWTIssuer | default (printf "https://%s.%s.svc" (include "substrate.fullname" (list "idp" .)) .Release.Namespace) -}}
+{{- end -}}
+
 {{/*
 ServiceAccount name of ate-api-server, as this chart creates it. Parent
 charts that need to bind additional Roles to this SA (e.g. env-source

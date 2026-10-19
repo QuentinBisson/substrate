@@ -67,7 +67,7 @@ See `values.yaml` for the full set; the important keys:
 | `atelet.imageCredentialProviderBinDir` | `""` | Host path to the kubelet credential provider binaries; both paths are mounted read-only |
 | `credentialProvider.namespacePolicies` | `[]` | Default-deny atespace-to-namespace grants; the chart includes get-only Secret RBAC for the provider |
 | `credentialProvider.additionalProviders` | `[]` | Further credential providers for the egress gateway, each `uriAuthority` (a lowercase DNS name) and `host` (`<service>.<namespace>.svc:<port>`); the gateway verifies the provider's `servicedns.podcert.ate.dev` serving certificate and presents its own pod identity, which the provider must require |
-| `ateApi.actorJWTIssuer` | `https://idp.<namespace>.svc` | Issuer placed in actor JWTs; set a stable URL reachable by relying parties |
+| `ateApi.actorJWTIssuer` | `https://<idp-service>.<namespace>.svc` | Issuer placed in actor JWTs; set a stable URL reachable by relying parties |
 | `objectStorePlugin.extraEnv` | `[]` | Object storage credentials/settings shared by both object-store plugins |
 | `objectStorePlugin.control.resources` / `objectStorePlugin.node.resources` | see `values.yaml` | Resources for the API and node object-store sidecars |
 | `ateApi.logLevel` | `info` | API server log level in its mounted config; one of `debug`, `info`, `warn`, or `error` |
@@ -93,8 +93,8 @@ memory values. Worker images are now named `ateworker-gvisor` and
 
 Upgrade `substrate-crds` before the application chart. Custom `SandboxConfig`
 resources now put assets and `pauseImage` under `spec.versions[]`, with a named
-`spec.defaultVersion`. WorkerPools use `spec.sandboxClasses[]`, and actor
-templates continue to select the config with `sandboxConfig.configName`.
+`spec.defaultVersion`. WorkerPools select the runtime through
+`spec.sandboxClasses[]`; remove `sandboxConfig` from actor templates.
 
 WorkerPools now resolve `spec.sandboxClasses[].configRef` or the class default
 before creating their worker Deployment. Ensure each pool names an existing
@@ -122,9 +122,10 @@ verifying and publishing them. `ATE_STORAGE_BACKEND` must not be set on the
 API server or atelet itself; select it through `atelet.storageBackend`.
 RustFS is wired automatically. Private S3 asset URLs must use `s3://`.
 
-The default gVisor config now uses the 2026-10-10 nightly (`v3`) for split
-filesystem checkpoints. Upgrade the sandbox config together with ateworker-gvisor;
-custom configs must pin a release with the same checkpoint support.
+The default gVisor config now uses the 2026-10-17 nightly (`v4`) for separate
+container-rootfs and durable-directory checkpoint bundles. Upgrade the sandbox config together with ateworker-gvisor;
+custom configs must pin a release with the same checkpoint support and supply
+the `gvisor` release tarball asset. Bare `runsc` assets are no longer accepted.
 
 The chart now denies ingress to the control-plane namespace by default and
 allows the component, router, egress, storage, and monitoring traffic it needs.
@@ -196,5 +197,13 @@ atelet, and workers together for the checkpoint validation and per-actor
 sandbox asset paths.
 
 The `ate-idp-server` binary serves actor JWT discovery and public signing keys
-over HTTPS. It is not deployed by this chart yet; upgrading the chart does not
-expose a discovery endpoint.
+over HTTPS. The chart deploys it behind the `idp` Service (prefixed with the
+release name for non-default releases) and permits HTTPS discovery traffic.
+The default actor JWT issuer points at this Service; external consumers need
+an externally reachable issuer URL and routing to it.
+
+Atelet now listens on TCP port 21998; update external firewall rules that
+allowed port 8085. Replace `PauseActor` calls with
+`SuspendActor` and `options.mode: DURABILITY_MODE_ASYNCHRONOUS`.
+`SuspendActor` defaults to asynchronous durability; callers that require an
+external snapshot before returning must request `DURABILITY_MODE_SYNCHRONOUS`.
