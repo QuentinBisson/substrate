@@ -40,6 +40,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atelet"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -52,6 +53,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -1305,6 +1307,7 @@ type recordingObjectStorage struct {
 	mu      sync.Mutex
 	objects map[string][]byte
 	putErr  error
+	onPut   func()
 }
 
 func (r *recordingObjectStorage) GetObject(_ context.Context, bucket, object string) (io.ReadCloser, error) {
@@ -1318,6 +1321,9 @@ func (r *recordingObjectStorage) GetObject(_ context.Context, bucket, object str
 }
 
 func (r *recordingObjectStorage) PutObject(_ context.Context, bucket, object string, reader io.Reader) error {
+	if r.onPut != nil {
+		r.onPut()
+	}
 	if r.putErr != nil {
 		return r.putErr
 	}
@@ -1563,12 +1569,15 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}
 	})
 
-	t.Run("gone locally and remotely crashes the actor", func(t *testing.T) {
+	t.Run("gone locally and remotely is NotFound", func(t *testing.T) {
 		s := newPluginHerder(t, &recordingObjectStorage{})
 
 		_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
-		if err == nil {
-			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
+		// atelet's server interceptor decides the code ate-api-server sees.
+		_, wireErr := ateinterceptors.InternalServerUnaryInterceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
+			func(context.Context, any) (any, error) { return nil, err })
+		if got := status.Code(wireErr); got != codes.NotFound {
+			t.Fatalf("code = %v (err %v), want NotFound", got, wireErr)
 		}
 		if !strings.Contains(err.Error(), "gone and no uploaded copy exists") {
 			t.Errorf("error = %v, want it to name the unrecoverable local snapshot", err)

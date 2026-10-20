@@ -20,11 +20,19 @@ limitations under the License.
 {{- if not .Values.postgres.ownerConnectionStringSecretRef.name }}
 {{- fail "postgres.ownerConnectionStringSecretRef.name is required" }}
 {{- end }}
+{{- $snapshotLocation := .Values.ateApi.snapshotLocation }}
+{{- if and (not $snapshotLocation) .Values.rustfs.enabled }}
+{{- $snapshotLocation = printf "gs://%s/" .Values.rustfs.bucket }}
+{{- end }}
+{{- if and (not $snapshotLocation) (not (has "PerTemplateSnapshotLocation" .Values.preview)) (not (has "ALL" .Values.preview)) }}
+{{- fail "ateApi.snapshotLocation is required when rustfs.enabled=false unless PerTemplateSnapshotLocation preview is enabled" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ .Values.ateApiServerEnvVarsConfigMap }}
   namespace: {{ .Release.Namespace }}
 data:
+  ATE_API_SNAPSHOT_LOCATION: {{ $snapshotLocation | quote }}
   ATE_API_POSTGRES_SCHEMA: {{ .Values.postgres.schema | quote }}
   ATE_API_ACTOR_JWT_ISSUER: {{ include "substrate.actorJWTIssuer" . | quote }}

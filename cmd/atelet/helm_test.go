@@ -155,7 +155,7 @@ func TestHelmSandboxAssetStorage(t *testing.T) {
 				"--set", "objectStorePlugin.extraEnv[0].name=AWS_REGION",
 				"--set", "objectStorePlugin.extraEnv[0].value=us-west-2"}
 			if !tc.rustfs {
-				args = append(args, "--set", "rustfs.enabled=false")
+				args = append(args, "--set", "rustfs.enabled=false", "--set", "ateApi.snapshotLocation=gs://external-snapshots/")
 			}
 			out, err := exec.CommandContext(t.Context(), "helm", args...).CombinedOutput()
 			if err != nil {

@@ -61,6 +61,7 @@ See `values.yaml` for the full set; the important keys:
 | `postgres.clientCertificates.enabled` | `false` | Project separate owner and runtime login certificates into the API server |
 | `<component>.resources` | see `values.yaml` | Requests and limits for each container, e.g. `ateApi.resources` and `atenetRouter.agentgateway.resources` |
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
+| `ateApi.snapshotLocation` | `""` | Cluster-wide snapshot URI; defaults to `gs://<rustfs.bucket>/` with bundled RustFS |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true` |
 | `atelet.imageCredentialProviderConfig` | `""` | Host path to the kubelet credential provider config; set together with the bin directory |
 | `atelet.imageCredentialProviderConfigYAML` | `""` | Credential provider config as text, rendered into a ConfigMap, for nodes where that file cannot be authored or must differ from the kubelet's; mutually exclusive with the host path |
@@ -184,16 +185,30 @@ to your operators' own principals and grant tenant access with `kubectl ate
 create access-policy`; anyone who can mint the shared client's token otherwise has
 global owner access. See [authorization](../../docs/authorization.md).
 
-Upgrade clients and components together: upstream now uses the
+Upstream renumbered protobuf fields, so older clients and binaries are not
+wire compatible. Upgrade clients and components together: upstream now uses the
 `go.ate.dev/substrate` Go module, and the worker protocol includes dynamic
 runtime registration and the unified suspend/pause workflow. Custom worker
 images and integrations must use the matching API version.
 
-Every checkpoint now requires an object-storage URI, including a pause that
-keeps its snapshot local. Ensure actor templates have a usable
-`snapshotConfig.storageLocation` before pausing them. Upgrade the API server,
-atelet, and workers together for the checkpoint validation and per-actor
-sandbox asset paths.
+The pinned agentgateway image includes the updated `Actor.status`, actor-state,
+and `MintActorJwtRequest` bindings. If you override `images.agentgateway`, use
+these bindings too; older images cannot resolve actor routes or mint actor JWTs
+against this API.
+
+Every checkpoint requires an object-storage URI, including a pause that
+keeps its snapshot local. The chart sets the cluster-wide snapshot location
+from `rustfs.bucket` for bundled storage; external storage installs must set
+`ateApi.snapshotLocation`. Actor templates inherit this location. Existing
+`snapshotConfig.storageLocation` overrides require the
+`PerTemplateSnapshotLocation` preview gate; remove those overrides when using
+the cluster default without the gate. Upgrade the API server, atelet, and
+workers together for checkpoint validation and per-actor sandbox asset paths.
+
+`DeleteActorRequest.any_state` and the CLI's `--any-state` flag are removed;
+actors can now be deleted in any state. Atelet's TLS listener now accepts only
+the API server's SPIFFE identity and no longer exposes a host port. The chart
+configures that identity for the release namespace and service account.
 
 The `ate-idp-server` binary serves actor JWT discovery and public signing keys
 over HTTPS. The chart deploys it behind the `idp` Service (prefixed with the

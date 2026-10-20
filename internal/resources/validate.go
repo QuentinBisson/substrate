@@ -15,7 +15,6 @@
 package resources
 
 import (
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/netip"
@@ -210,25 +209,12 @@ func ValidateSandboxAssetsDir(actorUID, dir string, fldPath *field.Path) field.E
 	return nil
 }
 
-// ValidateAssetHash ensures a sandbox asset's SHA-256 hash is exactly 64 hex
-// characters before it becomes the asset's cache key, so a malformed hash is
-// rejected as the request's fault rather than failing deep inside the cache.
-func ValidateAssetHash(sha256Hash string) error {
-	if len(sha256Hash) != 64 {
-		return fmt.Errorf("invalid asset sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
-	}
-	// Same decoder atelet's digest comparison uses.
-	if _, err := hex.DecodeString(sha256Hash); err != nil {
-		return fmt.Errorf("invalid asset sha256 hash %q: must be hex", sha256Hash)
-	}
-	return nil
-}
-
-// ValidateSnapshotLocation ensures an ActorTemplate's snapshotConfig.location
-// is a well-formed URI with a bucket, so a bad location fails fast instead of
-// deep inside an object-storage call. It deliberately does not restrict the
-// scheme: the storage layer only uses the host (bucket) and path, and which
-// schemes are acceptable is a storage-backend policy, not a per-RPC one.
+// ValidateSnapshotLocation ensures an ActorTemplate's
+// snapshotConfig.storageLocation is a well-formed URI with a bucket, so a bad
+// location fails fast instead of deep inside an object-storage call. It
+// deliberately does not restrict the scheme: the storage layer only uses the
+// host (bucket) and path, and which schemes are acceptable is a
+// storage-backend policy, not a per-RPC one.
 //
 // This validates the base that many snapshots share, not any one snapshot's
 // URI; SnapshotURI is the type for the latter, and it applies this check when

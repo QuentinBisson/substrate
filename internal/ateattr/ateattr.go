@@ -161,6 +161,8 @@ const (
 	SnapshotFidelityKey    = attribute.Key("ate.snapshot.fidelity")
 	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
 	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
+	FileCacheNameKey       = attribute.Key("ate.filecache.name")
+	FileCacheGCOutcomeKey  = attribute.Key("ate.filecache.gc.outcome")
 	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
 	RouterResumeKey        = attribute.Key("ate.router.resume")
 	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
@@ -235,6 +237,21 @@ const (
 	ImageCacheOutcomeError     = "error"
 	ImageCacheOutcomeCancelled = "cancelled"
 	ImageCacheOutcomeTimeout   = "timeout"
+)
+
+// Values for FileCacheNameKey.
+const (
+	// FileCacheSandboxAsset is the sandbox asset cache: the runsc binaries,
+	// kernels and guest images the workers run actors with.
+	FileCacheSandboxAsset = "sandbox_asset"
+)
+
+// Values for FileCacheGCOutcomeKey. A pass is quiet when the cache is within
+// its budget and nothing is asked of it; those are not recorded.
+const (
+	FileCacheGCOutcomeComplete  = "complete"  // the pass freed what the budget asked
+	FileCacheGCOutcomeShortfall = "shortfall" // it freed what it could, less than asked
+	FileCacheGCOutcomeSkipped   = "skipped"   // it could not size the cache and did nothing
 )
 
 // Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker
