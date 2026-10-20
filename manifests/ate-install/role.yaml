@@ -57,6 +57,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+- apiGroups:
   - ate.dev
   resources:
   - sandboxconfigs

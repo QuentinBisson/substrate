@@ -42,6 +42,7 @@ const networkingAtespace = "networking-e2e"
 
 // egressFixture returns the unified egress demo deployed by the E2E workflow.
 func egressFixture() e2e.Fixture { return e2e.EgressFixture() }
+
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
 	_, actorName, actor := createAndResumeSubstrateActor(t, ctx, "direct", e2e.SubstrateCounterFixture())
@@ -58,7 +59,7 @@ func TestActorDirectAccess(t *testing.T) {
 		})
 		t.Logf("Actor access through ingress succeeded; body: %s", body)
 	})
-	t.Run("duplicate actor header rejected on plain HTTP", func(t *testing.T) {
+	t.Run("duplicate actor header rejected", func(t *testing.T) {
 		actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 		for _, secondActor := range []string{actorRef.String(), "untrusted/actor"} {
 			t.Run(secondActor, func(t *testing.T) {
@@ -68,14 +69,14 @@ func TestActorDirectAccess(t *testing.T) {
 				}
 				req.Header.Add(atenet.TargetActorHeader, actorRef.String())
 				req.Header.Add(atenet.TargetActorHeader, secondActor)
-				resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+				resp, err := router.DoReq(req)
 				if err != nil {
 					t.Fatalf("sending request with duplicate actor headers: %v", err)
 				}
 				defer resp.Body.Close()
 				if resp.StatusCode != http.StatusNotFound {
 					body, _ := io.ReadAll(resp.Body)
-					t.Fatalf("duplicate actor header on plain HTTP returned %d, want 404; body: %s", resp.StatusCode, body)
+					t.Fatalf("duplicate actor header returned %d, want 404; body: %s", resp.StatusCode, body)
 				}
 			})
 		}
@@ -527,7 +528,7 @@ func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *at
 
 func mustRouterClient(t *testing.T, ctx context.Context) *e2e.RouterClient {
 	t.Helper()
-	router, err := e2e.NewRouterClient(ctx)
+	router, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
