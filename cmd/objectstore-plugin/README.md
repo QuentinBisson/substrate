@@ -1,4 +1,58 @@
-# Object-store plugin upload memory
+# objectstore-plugin
+
+The in-tree object-store plugin. It serves the `objectstore.v1` API over a Unix
+socket as a sidecar: `node` next to atelet, moving snapshot files and sandbox
+assets, and `control` next to ate-api-server, copying and deleting whole
+snapshots. `ATE_STORAGE_BACKEND` picks GCS, the default, or S3. See
+`docs/architecture.md` for where it sits.
+
+## Per-actor snapshot credentials on GCS
+
+On GCS, `control` mode also serves a credential exchange, when
+`--exchange-listen` is set: the node plugin presents the JWT atelet handed it
+with a transfer and receives a GCS access token limited to that actor's
+snapshot prefixes, read-write on its own and read-only on the tag it was
+created from. The exchange is private to this plugin, defined in
+`internal/proto/objectstoreexchangepb`.
+
+The JWT is the one ate-api-server mints for atelet through
+`WorkerService.MintWorkerActorJwt`, with the audience named on the
+`actor_jwt` proto field. Its shape is defined in `internal/actoridjwt`, and
+the exchange accepts only the worker-for-actor kind, never an actor's own
+token. Its public keys come from the `jwks` key of the `actor-id-jwt-pool`
+Secret, read through `oidcjwt.FileKeySource`.
+
+Three packages behind the exchange know no storage provider and are what a
+provider's own plugin binary reuses. The rest is this binary's.
+
+Reusable by every provider:
+
+- `internal/oidcjwt`: verifies the JWT against the `jwks` file.
+- `internal/objectstoreplugin/actorlookup`: fetches the actor over the
+  loopback, refuses a recreated one.
+- `internal/objectstoreplugin/actorscope`: turns the actor's status into
+  grants, read-write on its own prefix, read-only on its tag.
+
+This binary's, GCS and S3:
+
+- `internal/proto/objectstoreexchangepb`: the private wire format between the
+  node and control sidecars.
+- `internal/objectstoreplugin/exchange`: the handler, and the `Issuer` interface
+  that is the seam between its backends.
+- `internal/objectstoreplugin/gcsboundary`: grants to Credential Access Boundary
+  rules.
+- `internal/objectstoreplugin/gcsissuer`: the GCS `Issuer`, STS exchange and
+  token cache.
+- `cmd/objectstore-plugin`: the binary and its wiring.
+
+S3 has no issuer: its node plugin ignores the JWT and transfers with the
+pod's own credentials, and the exchange answers `UNIMPLEMENTED` there. A
+provider other than these two brings its own binary in this repository, with
+its own exchange handler and proto shaped for its credential, its own issuer
+and storage client, and imports the three reusable packages. A binary outside
+the repository cannot, since they are under `internal/`.
+
+## Upload memory
 
 The node plugin shares one upload memory budget across all snapshot requests.
 `--upload-memory-budget` accepts a Kubernetes quantity and defaults to `512Mi`.
@@ -13,9 +67,12 @@ compression or range parallelism to fit the budget; file size does not need to f
 in memory. The sparse format and download readers are unchanged.
 
 With the current buffer sizes, the minimum budget is `384Mi` for GCS and `224Mi`
-for S3. Startup rejects smaller values. The accounting is conservative: GCS
-reserves for a composite upload even when an object ultimately fits in one
-request. Raise the budget to trade memory for more simultaneous uploads.
+for S3. Startup rejects smaller values. Each upload reserves for the path it
+takes: on GCS, a file split into range parts reserves only those parts, and an
+object whose sparse stream is bounded below one request (`64Mi`) reserves that
+request's buffers instead of the composite-upload buffers. Other streamed
+objects still reserve for a composite upload, even when they ultimately fit in
+one request. Raise the budget to trade memory for more simultaneous uploads.
 
 The budget is **not a process memory limit**. The Go runtime, garbage awaiting
 collection, connections, downloads, and asset transfers need additional memory.
@@ -24,9 +81,11 @@ the existing `128Mi` request is not a bound on its usage. If setting `GOMEMLIMIT
 leave headroom below the container limit for memory outside the Go heap.
 
 A manifest included with data files is uploaded only after all those files
-succeed. The existing two-RPC flow (data, then manifest) also uses the same budget.
+succeed. The existing two-RPC flow (data, then manifest) also uses the same
+budget; a manifest small enough for one request reserves only that request's
+buffers.
 
-## Validation
+### Validation
 
 ```sh
 go test -race ./pkg/objectstorage ./internal/objectstoreplugin ./cmd/objectstore-plugin -count=2

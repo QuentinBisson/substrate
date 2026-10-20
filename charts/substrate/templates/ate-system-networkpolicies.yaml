@@ -79,6 +79,13 @@ spec:
     ports:
     - protocol: TCP
       port: 443
+  - from:
+    - podSelector:
+        matchLabels:
+          app: atelet
+    ports:
+    - protocol: TCP
+      port: exchange
 ---
 # The bundled postgres is reached only by ate-api-server. The installer runs
 # psql through `kubectl exec`, and the probes are exec probes, so neither needs
@@ -105,7 +112,7 @@ spec:
 ---
 # atelet's gRPC port is called only by ate-api-server, which dials the atelet
 # pod IP. Worker pods talk to atelet over its node-local Unix socket, not this
-# port. The hostPort mapping lands on the pod, so this policy covers it too.
+# port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

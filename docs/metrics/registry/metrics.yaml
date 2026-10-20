@@ -569,6 +569,50 @@ groups:
               value: timeout
               brief: The time limit of the caller ended.
 
+  - id: registry.ate.filecache
+    type: attribute_group
+    brief: >
+      The labels of the node-local file caches: the stores atelet serves
+      hard links from, such as the sandbox asset cache. They run on one
+      store and one eviction loop, so one set of instruments describes them,
+      told apart by name.
+    attributes:
+      - id: ate.filecache.name
+        stability: development
+        brief: Which file cache on the node the measurement is of.
+        type:
+          members:
+            - id: sandbox_asset
+              stability: development
+              value: sandbox_asset
+              brief: >
+                The sandbox asset cache: the runsc binaries, the kernels and
+                the guest images the workers run actors with. Each actor on
+                the node links its assets from this one cache.
+      - id: ate.filecache.gc.outcome
+        stability: development
+        brief: >
+          The result of one eviction pass that had work to do. A pass that
+          finds the cache within its budget records nothing.
+        type:
+          members:
+            - id: complete
+              stability: development
+              value: complete
+              brief: The pass freed what the budget asked.
+            - id: shortfall
+              stability: development
+              value: shortfall
+              brief: >
+                The pass freed less than the budget asked. What remains is
+                linked by a consumer, such as an actor or a worker's default
+                runtime, younger than the min age, or busy. The cache cannot
+                free it.
+            - id: skipped
+              stability: development
+              value: skipped
+              brief: The pass could not size the cache and removed nothing. It retries on the next tick.
+
   - id: registry.ate.stats
     type: attribute_group
     brief: The labels of the resource measurements of the actors.
@@ -1296,6 +1340,79 @@ groups:
             The outcome is error. The key holds the HTTP status of the registry.
             The permitted values are 401, 403, 404, 429, 500, 502, 503 and 504.
             Each other status, and each failure with no status, reports _OTHER.
+
+  - id: metric.ate.filecache.size
+    type: metric
+    metric_name: ate.filecache.size
+    instrument: updowncounter
+    unit: By
+    stability: development
+    brief: The bytes of disk that a file cache on the node occupies, by cache.
+    note: >
+      atelet reads the value on each collection as the sum of the allocated
+      size of each entry in the cache. Compare it with the budget that the
+      cache's max-bytes flag sets, --sandbox-asset-cache-max-bytes for the
+      sandbox asset cache. A value that stays over the budget with shortfall
+      passes means that the cache's consumers hold more than the budget: for
+      the sandbox asset cache, the actors and the workers' default runtimes.
+      The budget is too small, or the node hosts too many runtimes.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/filecachegc/filecachegc.go
+        cuj: The disk of a worker node fills. Is it one of the file caches?
+    attributes:
+      - ref: ate.filecache.name
+        requirement_level: required
+
+  - id: metric.ate.filecache.evictions
+    type: metric
+    metric_name: ate.filecache.evictions
+    instrument: counter
+    unit: "{entry}"
+    stability: development
+    brief: The number of entries that the eviction passes removed from a file cache on the node, by cache.
+    note: >
+      An entry is one cached file or tree, such as a runsc binary or a
+      micro-VM kernel. A pass removes only an entry that nothing links,
+      oldest first, and a dry run removes none. A rate that stays above zero
+      with a size at the budget means that the cache thrashes: an entry
+      leaves and returns on each pass, and each return pays for a download.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/filecachegc/filecachegc.go
+        cuj: Actors download their runtime again and again on one node. Does the cache evict it?
+    attributes:
+      - ref: ate.filecache.name
+        requirement_level: required
+
+  - id: metric.ate.filecache.gc.passes
+    type: metric
+    metric_name: ate.filecache.gc.passes
+    instrument: counter
+    unit: "{pass}"
+    stability: development
+    brief: The number of eviction passes over a file cache on the node that had work to do, by cache and outcome.
+    note: >
+      A pass that finds the cache within its budget is not counted. Thus a
+      series that grows means that the cache is over its budget. Read the
+      outcome: complete means that the passes keep up; shortfall means that
+      what remains is not the cache's to free; skipped means that atelet
+      cannot read the cache directory.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/internal/filecachegc/filecachegc.go
+        cuj: A file cache stays over its budget. Does the collector run, and what stops it?
+    attributes:
+      - ref: ate.filecache.name
+        requirement_level: required
+      - ref: ate.filecache.gc.outcome
+        requirement_level: required
 
   # ---------------------------------------------------------------------------
   # Metrics. atecontroller

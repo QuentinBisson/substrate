@@ -91,6 +91,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+{{- range $signal := list "logs" "traces" "metrics" }}
+        - name: ATE_WORKER_OTEL_{{ upper $signal }}_EXPORTER
+          value: {{ ternary "otlp" "none" (not (empty (include "substrate.otel.signalEndpoint" (list $signal $)))) | quote }}
+{{- end }}
 {{- with include "substrate.otel.env" . }}
 {{- . | trim | nindent 8 }}
 {{- end }}

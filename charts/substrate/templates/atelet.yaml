@@ -187,6 +187,7 @@ spec:
 {{- end }}
         - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+        - '--herder-allowed-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "ate-api-server" .) }}'
         - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
 {{- with .Values.atelet.extraArgs }}
 {{ toYaml . | indent 8 }}
@@ -229,7 +230,6 @@ spec:
         ports:
         - name: grpc
           containerPort: 21998
-          hostPort: 21998
         - name: prometheus
           containerPort: 9090
           protocol: TCP

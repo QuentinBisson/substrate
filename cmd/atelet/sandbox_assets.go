@@ -33,7 +33,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -42,7 +41,6 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/objectstorage"
@@ -116,31 +114,6 @@ type sandboxAssetsRecord struct {
 	Fidelity string `json:"fidelity,omitempty"`
 }
 
-// recordFromRequest projects a request's per-architecture SandboxAssets onto the
-// local node's architecture.
-func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error) {
-	if sa == nil {
-		return nil, fmt.Errorf("missing sandbox_assets")
-	}
-	arch := runtime.GOARCH
-	archAssets := sa.GetAssets()[arch]
-	if archAssets == nil || len(archAssets.GetFiles()) == 0 {
-		return nil, fmt.Errorf("sandbox_assets has no assets for architecture %q", arch)
-	}
-	if err := checkPauseImage(sa.GetSandboxClass(), sa.GetPauseImage()); err != nil {
-		return nil, fmt.Errorf("invalid sandbox_assets: %w", err)
-	}
-	rec := &sandboxAssetsRecord{
-		SandboxClass: sa.GetSandboxClass(),
-		PauseImage:   sa.GetPauseImage(),
-		Assets:       make(map[string]assetEntry, len(archAssets.GetFiles())),
-	}
-	for name, f := range archAssets.GetFiles() {
-		rec.Assets[name] = assetEntry{URL: f.GetUrl(), SHA256: f.GetSha256()}
-	}
-	return rec, nil
-}
-
 // checkPauseImage requires a pause image for gVisor, the only sandbox class
 // that runs a pause container.
 func checkPauseImage(sandboxClass, pauseImage string) error {
@@ -168,6 +141,14 @@ func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsReco
 	if err := os.MkdirAll(dstDir, 0o700); err != nil {
 		return nil, wrapFileSystemErr("while creating sandbox assets dir", err)
 	}
+	return s.stageSandboxAssets(ctx, rec, dstDir)
+}
+
+// stageSandboxAssets is ensureSandboxAssets into a dstDir that exists: it
+// creates nothing above the assets, so a caller whose dstDir may be removed
+// under it, as the prewarmer's is when its worker goes, fails instead of
+// recreating the directory.
+func (s *Atelet) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
 	paths := make(map[string]string, len(rec.Assets))
 	for name, entry := range rec.Assets {
 		if !plainAssetName(name) {

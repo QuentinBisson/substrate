@@ -21,5 +21,6 @@ metadata:
   name: ate-api-server-envvars
   namespace: ate-system
 data:
+  ATE_API_SNAPSHOT_LOCATION: "gs://ate-snapshots/"
   ATE_API_POSTGRES_SCHEMA: "substrate"
   ATE_API_ACTOR_JWT_ISSUER: "https://idp.ate-system.svc"

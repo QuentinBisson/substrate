@@ -243,6 +243,7 @@ func TestHelmObjectStorePlugins(t *testing.T) {
 			if external {
 				issuer = "https://actors.example.com"
 				args = append(args, "--set", "rustfs.enabled=false", "--set", "atelet.storageBackend=gcs",
+					"--set", "ateApi.snapshotLocation=gs://external-snapshots/",
 					"--set", "ateApi.actorJWTIssuer="+issuer,
 					"--set", "objectStorePlugin.extraEnv[0].name=GOOGLE_APPLICATION_CREDENTIALS",
 					"--set", "objectStorePlugin.extraEnv[0].value=/credentials/key.json")

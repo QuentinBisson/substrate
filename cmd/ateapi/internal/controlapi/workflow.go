@@ -29,7 +29,6 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/pluginsocket"
 	"go.ate.dev/substrate/internal/resources"
-	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/otel"
@@ -106,18 +105,17 @@ func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state str
 // each exported method begins with preview.ContextWithOptIn: the request was
 // already validated, and what the workflow writes is the system's own state.
 type ActorWorkflow struct {
-	store                actorWorkflowStore
-	workerCache          *workercache.Cache
-	scheduler            scheduling.Scheduler
-	dialer               *AteletDialer
-	workerPoolLister     listersv1alpha1.WorkerPoolLister
-	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
-	storageClassLister   storagev1listers.StorageClassLister
-	instruments          *Instruments
-	egressGatewayAddress string
-	pluginRegistry       VolumePluginRegistry
-	workflowDeadline     time.Duration
-	objectStorePlugin    objectstorev1.ControlProviderClient
+	store                   actorWorkflowStore
+	workerCache             *workercache.Cache
+	scheduler               scheduling.Scheduler
+	dialer                  *AteletDialer
+	storageClassLister      storagev1listers.StorageClassLister
+	instruments             *Instruments
+	egressGatewayAddress    string
+	pluginRegistry          VolumePluginRegistry
+	workflowDeadline        time.Duration
+	objectStorePlugin       objectstorev1.ControlProviderClient
+	clusterSnapshotLocation string
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. workflowDeadline bounds
@@ -130,8 +128,6 @@ func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
 	dialer *AteletDialer,
-	workerPoolLister listersv1alpha1.WorkerPoolLister,
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
 	egressGatewayAddress string,
@@ -144,8 +140,6 @@ func NewActorWorkflow(
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache),
 		dialer:               dialer,
-		workerPoolLister:     workerPoolLister,
-		sandboxConfigLister:  sandboxConfigLister,
 		storageClassLister:   storageClassLister,
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
@@ -153,6 +147,12 @@ func NewActorWorkflow(
 		workflowDeadline:     workflowDeadline,
 		objectStorePlugin:    objectStorePlugin,
 	}
+}
+
+// snapshotLocation returns the base object-storage URI actorTemplate's
+// snapshots are stored under; see resolveSnapshotLocation.
+func (w *ActorWorkflow) snapshotLocation(actorTemplate *ateapipb.ActorTemplate) (string, error) {
+	return resolveSnapshotLocation(w.clusterSnapshotLocation, actorTemplate)
 }
 
 // cleanupSnapshot deletes every object under prefix through the control

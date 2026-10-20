@@ -26,7 +26,7 @@ rules:
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
-  resources: ["workerpools", "sandboxconfigs", "csidriverconfigs"]
+  resources: ["workerpools", "csidriverconfigs"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
@@ -89,6 +89,12 @@ spec:
         args:
         - control
         - --socket=/run/objectstore-plugin/control.sock
+        - --exchange-listen=:8445
+        - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
+        - '--ateapi-server-name={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc'
+        ports:
+        - name: exchange
+          containerPort: 8445
         startupProbe:
           exec:
             command:
@@ -103,6 +109,15 @@ spec:
         resources:
 {{ toYaml .Values.objectStorePlugin.control.resources | indent 10 }}
         env:
+        - name: ATE_API_ACTOR_JWT_ISSUER
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.ateApiServerEnvVarsConfigMap }}
+              key: ATE_API_ACTOR_JWT_ISSUER
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
 {{- include "substrate.storage.env" . | nindent 8 }}
 {{- with include "substrate.otel.env" . }}
 {{- . | trim | nindent 8 }}
@@ -110,6 +125,9 @@ spec:
         volumeMounts:
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
+        - { name: servicedns, mountPath: /run/servicedns.podcert.ate.dev, readOnly: true }
+        - { name: podidentity, mountPath: /run/podidentity.podcert.ate.dev, readOnly: true }
+        - { name: actor-id-jwt-jwks, mountPath: /run/actor-id-jwt-jwks, readOnly: true }
       containers:
       - name: ate-api-server
         image: {{ include "substrate.componentImage" (list "ateapi" .) }}
@@ -118,6 +136,7 @@ spec:
         args:
         - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
         - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
+        - --snapshot-location=@env
         - "--grpc-listen-addr=0.0.0.0:443"
         - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
         - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
@@ -135,6 +154,7 @@ spec:
         - "--default-egress-gateway-address={{ include "substrate.fullname" (list "atenet-egress" .) }}.{{ .Release.Namespace }}.svc:443"
         - '--atelet-service-account={{ include "substrate.fullname" (list "atelet" .) }}'
         - '--controller-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "ate-controller" .) }}'
+        - '--api-server-sidecar-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "ate-api-server" .) }}'
         - '--egress-gateway-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "atenet-egress" .) }}'
         - '--ingress-router-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "atenet-router" .) }}'
         - "--atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
@@ -236,6 +256,13 @@ spec:
               name: actor-id-jwt-pool
               items:
               - { key: pool, path: pool.json }
+      - name: actor-id-jwt-jwks
+        projected:
+          sources:
+          - secret:
+              name: actor-id-jwt-pool
+              items:
+              - { key: jwks, path: jwks.json }
       - name: actor-id-ca-pool
         projected:
           sources:
@@ -305,3 +332,7 @@ spec:
     protocol: TCP
     port: 443
     targetPort: 443
+  - name: exchange
+    protocol: TCP
+    port: 8445
+    targetPort: exchange

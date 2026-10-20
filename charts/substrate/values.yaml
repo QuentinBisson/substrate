@@ -107,6 +107,10 @@ objectStorePlugin:
 
 # Additional arguments appended to the ateapi defaults.
 ateApi:
+  # Cluster-wide snapshot URI. Empty uses gs://<rustfs.bucket>/ when RustFS is
+  # enabled (the S3 backend also uses gs:// URIs). Required for external storage
+  # unless the PerTemplateSnapshotLocation preview gate is enabled.
+  snapshotLocation: ""
   logLevel: info
   authorization:
     enabled: true
@@ -229,5 +233,5 @@ image:
 images:
   rustfs: rustfs/rustfs:1.0.0-beta.3@sha256:378642b05b7dcb4849fb77ebe6aca4ced1c3f66e7e504247df95a5c9018d3358
   awsCli: amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73
-  agentgateway: ghcr.io/kagent-dev/substrate/agentgateway:3554db38a0b2@sha256:309f6811560635471958db67b0f68dd083d84048dffc681967599d159ebfc83d
+  agentgateway: ghcr.io/kagent-dev/substrate/agentgateway:b736d06f88eb@sha256:39898817ed3e94b78570d20862fec06f32142fe8dee8691070128e74b5290407
   busybox: busybox:1.36

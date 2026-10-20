@@ -74,11 +74,12 @@ type VolumePluginRegistry interface {
 //
 // actorJWTIssuer is copied verbatim into the iss claim of every actor JWT.
 // actorWorkflowDeadline bounds each Resume/Suspend workflow end-to-end.
+//
+// snapshotLocation is ate-api-server's cluster-wide --snapshot-location; see
+// resolveSnapshotLocation.
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
-	workerPoolLister listersv1alpha1.WorkerPoolLister,
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
 	dialer *AteletDialer,
@@ -90,8 +91,10 @@ func NewRPCService(
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	actorIDCAPool localca.Pool,
+	snapshotLocation string,
 ) *RPCService {
 	impl := newServiceImpl(persistence, storageClassLister)
+	impl.clusterSnapshotLocation = snapshotLocation
 	s := &RPCService{
 		impl:                  impl,
 		persistence:           persistence,
@@ -105,7 +108,8 @@ func NewRPCService(
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, actorWorkflowDeadline, objectStorePlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, actorWorkflowDeadline, objectStorePlugin)
+	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }
@@ -179,6 +183,10 @@ type ServiceImpl struct {
 	store store.Interface
 
 	storageClassLister storagev1listers.StorageClassLister
+
+	// clusterSnapshotLocation is ate-api-server's --snapshot-location; see
+	// resolveSnapshotLocation.
+	clusterSnapshotLocation string
 }
 
 var _ store.Interface = (*ServiceImpl)(nil)

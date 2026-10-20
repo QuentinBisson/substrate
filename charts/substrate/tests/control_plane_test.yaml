@@ -66,7 +66,7 @@ tests:
         apiGroups: [ate.dev]
         resources: [sandboxconfigs, workerpools]
         verbs: [get, list, watch]
-- it: probes atelet health without exposing metrics on the host
+- it: probes atelet health without exposing host ports
   template: atelet.yaml
   documentSelector:
     path: kind
@@ -77,7 +77,6 @@ tests:
       content:
         name: grpc
         containerPort: 21998
-        hostPort: 21998
   - contains:
       path: spec.template.spec.containers[0].ports
       content:
@@ -96,6 +95,11 @@ tests:
   - equal:
       path: spec.template.spec.containers[0].livenessProbe.httpGet.port
       value: health
+  - notExists:
+      path: spec.template.spec.containers[0].ports[0].hostPort
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --herder-allowed-spiffe-id=spiffe://cluster.local/ns/custom-system/sa/custom-ate-api-server
   - contains:
       path: spec.template.spec.tolerations
       content:
@@ -250,3 +254,28 @@ tests:
         apiGroups: [""]
         resources: [serviceaccounts]
         verbs: [create, patch]
+
+- it: retains the controller sandbox configuration permissions
+  template: role.yaml
+  documentSelector:
+    path: kind
+    value: ClusterRole
+  asserts:
+  - contains:
+      path: rules
+      content:
+        apiGroups: [ate.dev]
+        resources: [sandboxconfigs]
+        verbs: [get, list, patch, watch]
+- it: limits API configuration reads to pools and CSI drivers
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: ClusterRole
+  asserts:
+  - equal:
+      path: rules[1]
+      value:
+        apiGroups: [ate.dev]
+        resources: [workerpools, csidriverconfigs]
+        verbs: [get, watch, list]
