@@ -25,7 +25,6 @@ jobs:
     env:
       VERSION: helm-e2e
       E2E_ATENET_DATAPLANE: agentgateway
-      E2E_INGRESS_AUTH_MODE: deprecated-insecure
       E2E_CREDENTIAL_PROVIDER: "1"
       # Retain external-volume coverage after the preview gate is introduced.
       ATE_PREVIEW: ALL
@@ -75,12 +74,12 @@ jobs:
       run: helm upgrade --install substrate-crds charts/substrate-crds
     - name: Bootstrap mTLS authorities
       run: |
-        hack/install-ate-kind.sh --create-podcertificate-controller-cas
-        hack/install-ate-kind.sh --create-jwt-authority-pool-secret
-        hack/install-ate-kind.sh --create-actor-id-ca-pool-secret
-        hack/install-ate-kind.sh --create-actor-id-ca-certs-secret
-        hack/install-ate-kind.sh --create-api-authentication-config
-        hack/install-ate-kind.sh --create-egress-mitm-ca-pool-secret
+        hack/install-ate-kind.sh create podcertificate-controller-cas
+        hack/install-ate-kind.sh create jwt-authority-pool
+        hack/install-ate-kind.sh create actor-id-ca-pool
+        hack/install-ate-kind.sh create actor-id-ca-certs
+        hack/install-ate-kind.sh create api-authentication-config
+        hack/install-ate-kind.sh create egress-mitm-ca-pool
     - name: Install certificate controller
       run: |
         helm upgrade --install substrate-podcert charts/substrate-podcert \
@@ -109,16 +108,16 @@ jobs:
         sudo modprobe nfs || true
         sudo modprobe nfsd || true
     - name: Install CSI NFS driver
-      run: hack/install-ate-kind.sh --setup-csi=nfs
+      run: hack/install-ate-kind.sh setup csi nfs
     - name: Deploy micro-VM counter demo
       # The deploy creates the substrate ActorTemplate and waits for its golden
       # snapshot internally; the ActorTemplate CRD (and its Ready condition)
       # no longer exists to wait on.
       run: hack/run-microvm-demo-kind.sh --skip-control-plane
     - name: Deploy gVisor counter demo
-      run: hack/install-ate-kind.sh --deploy-demo-counter
+      run: hack/install-ate-kind.sh deploy demo counter
     - name: Deploy egress demo
-      run: hack/install-ate-kind.sh --deploy-demo-egress
+      run: hack/install-ate-kind.sh deploy demo egress
     - name: Trust local E2E TLS origins
       run: hack/setup-e2e-egress-tls-kind.sh
     - name: Run E2E tests (gVisor)

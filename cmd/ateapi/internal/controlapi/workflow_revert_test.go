@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
@@ -26,6 +27,7 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestEnsureMarkedReverting_StateMatrix pins which states a revert is accepted
@@ -35,7 +37,7 @@ import (
 // SUSPENDED is the load-bearing rejection: it is revert's own destination, and
 // also what a suspend that won the race leaves behind, so accepting it would
 // report success for the opposite of what was asked. A SUSPENDED actor that
-// holds a node-local snapshot is paused, not reverted, and is accepted; see
+// holds a node-local snapshot is accepted; see
 // TestEnsureMarkedReverting_AcceptsPaused.
 func TestEnsureMarkedReverting_StateMatrix(t *testing.T) {
 	allowed := map[ateapipb.ActorState]bool{
@@ -69,9 +71,9 @@ func TestEnsureMarkedReverting_StateMatrix(t *testing.T) {
 	}
 }
 
-// TestEnsureMarkedReverting_AcceptsPaused verifies a paused actor (SUSPENDED
-// whose latest snapshot is node-local) takes the revert edge: the revert
-// discards that snapshot and returns the actor to its durable one.
+// TestEnsureMarkedReverting_AcceptsPaused verifies a SUSPENDED actor whose
+// latest snapshot is node-local takes the revert edge: the revert discards that
+// local copy and returns the actor to its durable snapshot.
 func TestEnsureMarkedReverting_AcceptsPaused(t *testing.T) {
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
@@ -105,7 +107,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		seedState ateapipb.ActorState
-		// paused seeds the paused shape: the latest snapshot is node-local
+		// paused seeds the local-snapshot shape: the latest snapshot is node-local
 		// and the actor is pinned to its node. Only meaningful with
 		// SUSPENDED, which the revert otherwise rejects.
 		paused bool
@@ -131,9 +133,10 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			}
 
 			// The snapshot revert must preserve, plus the node-local state a
-			// pause left behind, which it must not. A paused actor's latest
-			// snapshot is the completed local one; the other origins also carry
-			// the half-written local snapshot an interrupted pause leaves.
+			// suspend left behind, which it must not. The suspended actor's
+			// latest snapshot is the completed local one; the other origins
+			// also carry the half-written local snapshot an interrupted suspend
+			// leaves.
 			const keptURI = "gs://snapshots/team-a/actors/keep/snapshot"
 			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
 			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
@@ -220,11 +223,124 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 	}
 }
 
-// TestRevertActor_PausedSnapshotAlreadyUploaded verifies a revert of a paused
-// actor whose snapshot atelet uploaded returns it to that upload, its latest
-// durable snapshot, and collects the durable snapshot the upload replaced. The
-// actor has no assigned node, so there is nothing to terminate, as in
-// TestRevertActor_ReturnsActorToItsSnapshot.
+func TestRevertActor_UnreachableNode(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		node     string
+		err      error
+		pending  bool
+		assigned bool
+		crashed  bool
+		conflict bool
+		wantCode codes.Code
+	}{
+		{name: "missing atelet", node: "node-3"},
+		{name: "unavailable atelet", node: "node-1", err: apierror.Unavailable("offline")},
+		{name: "atelet deadline", node: "node-1", err: context.DeadlineExceeded},
+		{name: "pending beside older completed snapshot", node: "node-1", err: apierror.Unavailable("offline"), pending: true, wantCode: codes.Unavailable},
+		{name: "worker still assigned", node: "node-1", err: apierror.Unavailable("offline"), assigned: true, wantCode: codes.Unavailable},
+		{name: "crashed execution still needs termination", node: "node-1", err: apierror.Unavailable("offline"), crashed: true, wantCode: codes.Unavailable},
+		{name: "other RPC failure", node: "node-1", err: apierror.Internal("injected failure"), wantCode: codes.Internal},
+		{name: "concurrent update", node: "node-1", err: apierror.Unavailable("offline"), conflict: true, wantCode: codes.Aborted},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+			wire, atelet := newWireCaptureWorkflow(t, st)
+			w.dialer = wire.dialer
+			ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			seedWorkflowActor(t, ctx, st, ref, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+			actor, err := st.GetActor(ctx, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actor = mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
+				s.AssignedNode = tt.node
+				s.LastAssignedGeneration = 2
+				snap := newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "uploaded", tt.node)
+				snap.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				if tt.pending {
+					snap.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+				}
+				s.Snapshots = []*ateapipb.Snapshot{
+					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, snap.GetFidelity(), "", "older", "gs://snapshots/team-a/actors/older/snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					snap,
+				}
+				if tt.assigned {
+					s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+					s.WorkerAssignment = wireTestAssignment()
+				}
+				if tt.crashed {
+					s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+					s.Crash = newActorCrash("ResumeActor", "interrupted execution")
+				}
+			})
+			want := proto.CloneOf(actor.GetStatus().GetSnapshots()[1])
+			atelet.terminateErr = tt.err
+			if tt.conflict {
+				atelet.onTerminate = func() {
+					cur, err := st.GetActor(ctx, ref)
+					if err != nil {
+						t.Errorf("GetActor: %v", err)
+						return
+					}
+					if _, err := st.UpdateActor(ctx, ref, store.PreconditionFrom(cur), func(a *ateapipb.Actor) error {
+						a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"changed": "true"}}
+						return nil
+					}); err != nil {
+						t.Errorf("UpdateActor: %v", err)
+					}
+				}
+			}
+			reverted, err := w.RevertActor(ctx, ref)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Fatalf("RevertActor = %v, want %v", err, tt.wantCode)
+			}
+			if tt.wantCode != codes.OK {
+				stored, err := st.GetActor(ctx, ref)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := stored.GetStatus()
+				if got.GetState() != ateapipb.ActorState_ACTOR_STATE_REVERTING || got.GetAssignedNode() != tt.node {
+					t.Fatalf("status = %v, want REVERTING on %s", got, tt.node)
+				}
+				if !proto.Equal(got.GetSnapshots()[1], want) {
+					t.Fatalf("snapshot changed after failed revert: %v", got.GetSnapshots())
+				}
+				if !tt.conflict {
+					return
+				}
+				atelet.mu.Lock()
+				atelet.onTerminate = nil
+				atelet.mu.Unlock()
+				reverted, err = w.RevertActor(ctx, ref)
+				if err != nil {
+					t.Fatalf("retry after conflict: %v", err)
+				}
+			}
+			got := reverted.GetStatus()
+			if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || got.GetAssignedNode() != "" || got.GetWorkerAssignment() != nil {
+				t.Fatalf("reverted status = %v, want unbound SUSPENDED", got)
+			}
+			if len(got.GetSnapshots()) != 1 {
+				t.Fatalf("snapshots = %v, want only the latest durable snapshot", got.GetSnapshots())
+			}
+			want.Locality = ""
+			if !proto.Equal(got.GetSnapshots()[0], want) {
+				t.Errorf("retained snapshot = %v, want %v", got.GetSnapshots()[0], want)
+			}
+		})
+	}
+}
+
+// TestRevertActor_PausedSnapshotAlreadyUploaded verifies a revert of a
+// suspended actor whose local snapshot atelet uploaded returns it to that
+// upload, its latest durable snapshot, and collects the durable snapshot the
+// upload replaced. The actor has no assigned node, so there is nothing to
+// terminate, as in TestRevertActor_ReturnsActorToItsSnapshot.
 func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
@@ -380,8 +496,8 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 		// foreignInFlight records the in-progress snapshot under another
 		// owner's prefix, which no suspend can produce.
 		foreignInFlight bool
-		// earlierPause records an older PENDING snapshot: a pause whose upload
-		// atelet never reported before the actor resumed.
+		// earlierPause records an older PENDING snapshot: an async suspend whose
+		// upload atelet never reported before the actor resumed.
 		earlierPause              bool
 		wantInFlightDiscarded     bool
 		wantEarlierPauseDiscarded bool

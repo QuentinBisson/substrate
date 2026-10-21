@@ -21,6 +21,7 @@ import (
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/hardware"
 	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
@@ -98,11 +99,11 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		for _, w := range ws {
 			state := workerState(w)
-			// CreateWorker accepts an empty class, as the field is optional.
-			// Report it as unknown, not as the pool's class: the scheduler puts
-			// no actor on a worker that offers no class, thus the pool's series
-			// must not count it as free capacity.
-			class := ateattr.NormalizeSandboxClass(w.GetSandboxClass())
+			// A Worker has no sandbox class until its worker registers with
+			// WorkerService. Report it as unknown, not as the pool's class: the
+			// scheduler puts no actor on a worker that offers no class, thus
+			// the pool's series must not count it as free capacity.
+			class := ateattr.NormalizeSandboxClass(hardware.SandboxClass(w.GetStatus()))
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
 		for k, n := range tally {
@@ -201,13 +202,13 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 	i.lifecycleOpDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
 
-// lifecycleOpAttrs builds the resume/suspend/pause/revert dimensions from
+// lifecycleOpAttrs builds the resume/suspend/revert dimensions from
 // workflow state. Nil-safe, and omits the template, pool, sandbox-class,
 // snapshot-kind and snapshot-fidelity labels until they are known so a failure
 // before the load/assign/restore steps never emits an empty-string series.
-// snapshotKind is empty for suspend/pause, which do not restore; snapshotScope
-// applies to all three and separates a full restore from a data-only one of the
-// same kind.
+// snapshotKind is empty for suspend, which does not restore; snapshotScope
+// applies to resume and suspend and separates a full restore from a data-only
+// one of the same kind.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
 func lifecycleOpAttrs(actor *ateapipb.Actor, snapshotKind, snapshotScope string) []attribute.KeyValue {
 	var attrs []attribute.KeyValue

@@ -17,6 +17,7 @@ package snapshottracker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"slices"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
+	clocktesting "k8s.io/utils/clock/testing"
 )
 
 // eventually polls cond until it holds, and fails the test if it does not
@@ -334,7 +336,7 @@ func TestTrackerDetach(t *testing.T) {
 	}
 }
 
-// A local snapshot no detach can make durable, as a pause takes today, never
+// A local snapshot no detach can make durable (e.g. with no upload URI) never
 // comes due for a background detach, rather than failing it again and again.
 // A checkpoint that replaces it schedules a detach again.
 func TestTrackerSkipsUndetachableSnapshots(t *testing.T) {
@@ -402,7 +404,7 @@ func TestTrackerDetachTimer(t *testing.T) {
 
 	tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
 	due := detachDueOf(tr, trackedActorUID)
-	endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s3", 3, time.Time{}).Snapshot)
+	_, endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s3", 3, time.Time{}).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 	if err != nil {
 		t.Fatalf("beginCheckpoint: %v", err)
 	}
@@ -428,8 +430,8 @@ func TestTrackerDetachTimer(t *testing.T) {
 	}
 }
 
-// A start that cannot save that it unscheduled the actor's detach fails before
-// anything starts, and leaves the detach scheduled.
+// A start that cannot save that it began fails before anything starts, and
+// leaves the detach scheduled and the actor not started.
 func TestTrackerStartFailsIfItCannotSave(t *testing.T) {
 	tr := newIdleTestTracker(t, newFakeSnapshotStore())
 	stateFile := ateletpath.ActorSnapshotStateFile(trackedActorUID)
@@ -438,7 +440,8 @@ func TestTrackerStartFailsIfItCannotSave(t *testing.T) {
 	if err := os.MkdirAll(stateFile, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+	s1 := testRef("s1", 1, tr.clock.Now())
+	tr.CommitLocal(trackedActorUID, s1)
 	due := detachDueOf(tr, trackedActorUID)
 	if due.IsZero() {
 		t.Fatal("no detach scheduled after the checkpoint")
@@ -449,6 +452,9 @@ func TestTrackerStartFailsIfItCannotSave(t *testing.T) {
 	}
 	if got := detachDueOf(tr, trackedActorUID); !got.Equal(due) {
 		t.Errorf("detachDue after the failed start = %v, want %v kept", got, due)
+	}
+	if !tr.NotStartedSince(trackedActorUID, s1.Snapshot) {
+		t.Error("NotStartedSince after the failed start = false, want true")
 	}
 	if hold := tr.actors[trackedActorUID].hold; hold != holdNone {
 		t.Errorf("hold after the failed start = %v, want none", hold)
@@ -483,7 +489,8 @@ func TestTrackerWaitsForDetach(t *testing.T) {
 		{
 			name: "BeginCheckpoint",
 			begin: func(tr *Tracker, ctx context.Context, uid string) (func(), error) {
-				return tr.BeginCheckpoint(ctx, uid, testRef("s2", 2, time.Time{}).Snapshot)
+				_, end, err := tr.BeginCheckpoint(ctx, uid, testRef("s2", 2, time.Time{}).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+				return end, err
 			},
 		},
 	} {
@@ -539,7 +546,7 @@ func TestTrackerDetachWaitChecksGeneration(t *testing.T) {
 
 	stale := testRef("s0", 1, time.Time{})
 	returnsPromptly(t, "BeginCheckpoint of stale generation during detach", func() {
-		if _, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, stale.Snapshot); apierror.Code(err) != codes.Aborted {
+		if _, _, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, stale.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); apierror.Code(err) != codes.Aborted {
 			t.Errorf("BeginCheckpoint = %v, want Aborted", err)
 		}
 	})
@@ -652,7 +659,7 @@ func TestTrackerHoldsFirstCheckpoint(t *testing.T) {
 	store := newFakeSnapshotStore()
 	tr := newIdleTestTracker(t, store)
 	s1 := testRef("s1", 1, tr.clock.Now())
-	end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s1.Snapshot)
+	_, end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s1.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 	if err != nil {
 		t.Fatalf("beginCheckpoint: %v", err)
 	}
@@ -710,12 +717,12 @@ func TestTrackerLiftsBackoffWithDetach(t *testing.T) {
 	}
 }
 
-// Forget does not wait for a detach in progress: it cancels the detach, which
-// fails and leaves the forgotten actor's local snapshots for Terminate to
-// prune.
-func TestTrackerForgetAbandonsDetach(t *testing.T) {
+// Forget cancels a detach in progress and waits for it to end, leaving the
+// forgotten actor's local snapshots for Terminate to prune.
+func TestTrackerForgetCancelsDetach(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
+	store.setIgnoreCancel(true)
 	tr := newTestTracker(t, store)
 	if err := os.MkdirAll(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"), 0o700); err != nil {
 		t.Fatal(err)
@@ -724,13 +731,29 @@ func TestTrackerForgetAbandonsDetach(t *testing.T) {
 	detached := startDetach(t, tr)
 	waitStarted(t, store)
 
-	returnsPromptly(t, "Forget during a detach", func() {
-		if err := tr.Forget(trackedActorUID); err != nil {
-			t.Errorf("Forget: %v", err)
-		}
-	})
+	forgetDone := make(chan error, 1)
+	go func() {
+		forgetDone <- tr.Forget(trackedActorUID)
+	}()
+	if got := waitCanceled(t, store); got != "s1" {
+		t.Fatalf("canceled detach upload = %q, want s1", got)
+	}
+	select {
+	case err := <-forgetDone:
+		t.Fatalf("Forget returned (%v) before the canceled detach ended", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	store.release <- context.Canceled
 	if err := <-detached; !errors.Is(err, context.Canceled) {
 		t.Errorf("detach = %v, want %v", err, context.Canceled)
+	}
+	select {
+	case err := <-forgetDone:
+		if err != nil {
+			t.Errorf("Forget: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for Forget to return")
 	}
 	if st := tr.State(trackedActorUID); !proto.Equal(st, &ateletpb.ActorSnapshotState{}) {
 		t.Errorf("state after forget = %v, want empty", st)
@@ -823,8 +846,122 @@ func TestTrackerRequeuesUntilDetachIsDue(t *testing.T) {
 	}
 }
 
+// A Detach whose caller leaves mid-upload returns the caller's error, and the
+// detach runs on to finish and report. Wait covers it.
+func TestTrackerDetachOutlivesCaller(t *testing.T) {
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	tr := newIdleTestTracker(t, store)
+	if err := os.MkdirAll(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() {
+		_, err := tr.Detach(ctx, trackedActorUID)
+		first <- err
+	}()
+	waitStarted(t, store)
+	done := opDone(t, tr, trackedActorUID)
+	cancel()
+	returnsPromptly(t, "Detach after its caller left", func() {
+		if err := <-first; !errors.Is(err, context.Canceled) {
+			t.Errorf("first detach = %v, want %v", err, context.Canceled)
+		}
+	})
+
+	// Wait covers the detach, so atelet's shutdown waits for it.
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancelWait()
+	if err := tr.Wait(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Wait while the detach runs = %v, want %v", err, context.DeadlineExceeded)
+	}
+
+	store.release <- nil
+	waitClosed(t, done, "the detach its caller left")
+	if st := tr.State(trackedActorUID); st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+		t.Errorf("state = %v, want s1 durable and nothing local", st)
+	}
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("s1 after the detach: %v, want it deleted", err)
+	}
+	if !reportDue(tr) {
+		t.Error("no report due after the detach its caller left")
+	}
+	if got := store.uploads(); !slices.Equal(got, []string{"s1"}) {
+		t.Errorf("uploads = %v, want s1 once", got)
+	}
+}
+
+// A detach that fails after its caller left logs the failure.
+func TestTrackerLogsDetachFailingAfterCallerLeft(t *testing.T) {
+	failures := recordLogLevels(t, "Snapshot operation failed")
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	tr := newIdleTestTracker(t, store)
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() {
+		_, err := tr.Detach(ctx, trackedActorUID)
+		first <- err
+	}()
+	waitStarted(t, store)
+	done := opDone(t, tr, trackedActorUID)
+	cancel()
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatalf("detach = %v, want %v", err, context.Canceled)
+	}
+	store.release <- errors.New("object store unavailable")
+	waitClosed(t, done, "the detach its caller left")
+	if got := failures(); !slices.Equal(got, []slog.Level{slog.LevelWarn}) {
+		t.Errorf("failure logs = %v, want one at %v", got, slog.LevelWarn)
+	}
+}
+
+// After Wait begins, Detach starts nothing.
+func TestTrackerDetachRefusedOnceWaitBegins(t *testing.T) {
+	store := newFakeSnapshotStore()
+	tr := newIdleTestTracker(t, store)
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+	if err := tr.Wait(t.Context()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if _, err := tr.Detach(t.Context(), trackedActorUID); apierror.Code(err) != codes.Unavailable {
+		t.Errorf("detach after Wait = %v, want Unavailable", err)
+	}
+	if got := store.uploads(); len(got) != 0 {
+		t.Errorf("uploads = %v, want none", got)
+	}
+}
+
+// A detach the tracker's shutdown ends fails a live caller with Unavailable.
+func TestTrackerDetachStoppedByShutdownIsUnavailable(t *testing.T) {
+	useActorDir(t)
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	trackerCtx, stop := context.WithCancel(t.Context())
+	tr := New(trackerCtx, store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)),
+		WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay))
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+	detached := make(chan error, 1)
+	go func() {
+		_, err := tr.Detach(t.Context(), trackedActorUID)
+		detached <- err
+	}()
+	waitStarted(t, store)
+	stop()
+	if err := <-detached; apierror.Code(err) != codes.Unavailable {
+		t.Errorf("detach during shutdown = %v, want Unavailable", err)
+	}
+}
+
 // cancelingStore is a Store whose upload succeeds just after cancel ends the
-// detach's context, as Forget or the Detach caller can.
+// detach's context, as Forget or the tracker's shutdown can.
 type cancelingStore struct{ cancel context.CancelFunc }
 
 func (s *cancelingStore) UploadLocalSnapshot(context.Context, string, SnapshotRef) (bool, error) {
@@ -832,18 +969,21 @@ func (s *cancelingStore) UploadLocalSnapshot(context.Context, string, SnapshotRe
 	return true, nil
 }
 
-// A detach whose context ends as its upload succeeds records the upload, but
-// deletes no local snapshot, and fails with the context's error.
+// A detach whose context ends as its upload succeeds records the upload but
+// deletes no local snapshot. The tracker's shutdown ends it here, so the
+// caller gets Unavailable.
 func TestTrackerDetachDoesNotPruneOnceCancelled(t *testing.T) {
+	useActorDir(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	tr := newIdleTestTracker(t, &cancelingStore{cancel: cancel})
+	tr := New(ctx, &cancelingStore{cancel: cancel}, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)),
+		WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay))
 	if err := os.MkdirAll(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
 
-	if _, err := tr.Detach(ctx, trackedActorUID); !errors.Is(err, context.Canceled) {
-		t.Fatalf("detach = %v, want %v", err, context.Canceled)
+	if _, err := tr.Detach(t.Context(), trackedActorUID); apierror.Code(err) != codes.Unavailable {
+		t.Fatalf("detach = %v, want Unavailable", err)
 	}
 	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); err != nil {
 		t.Errorf("s1 after the cancelled detach: %v, want it kept", err)
@@ -894,9 +1034,8 @@ func TestTrackerDetachActsForTheActor(t *testing.T) {
 	})
 }
 
-// A background detach whose upload runs past the upload timeout fails, backs
-// off, and keeps the local snapshot to retry; a foreground Detach RPC is
-// bounded by its caller's context instead.
+// A detach whose upload runs past the upload timeout fails and keeps the local
+// snapshot to retry, whether a worker or a Detach call runs it.
 func TestTrackerDetachUploadTimeout(t *testing.T) {
 	t.Run("background", func(t *testing.T) {
 		store := newFakeSnapshotStore()
@@ -928,21 +1067,28 @@ func TestTrackerDetachUploadTimeout(t *testing.T) {
 		}
 	})
 
-	t.Run("foreground ignores background upload timeout", func(t *testing.T) {
+	t.Run("foreground", func(t *testing.T) {
 		store := newFakeSnapshotStore()
 		store.setBlocking(true)
-		tr := newTestTracker(t, store)
+		tr := newIdleTestTracker(t, store)
 		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
-
 		detached := startDetach(t, tr)
 		waitStarted(t, store)
-		if d := store.lastDeadline(); !d.IsZero() {
-			t.Errorf("foreground Detach's upload has deadline %v, want none beyond its caller's", d)
+		if d := store.lastDeadline(); d.IsZero() {
+			t.Error("foreground Detach's upload has no deadline, want the upload timeout")
 		}
 
-		store.release <- nil
-		if err := <-detached; err != nil {
-			t.Fatalf("Detach: %v", err)
+		stepTo(tr, tr.clock.Now().Add(testUploadTimeout))
+		select {
+		case err := <-detached:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Detach = %v, want %v", err, context.DeadlineExceeded)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("Detach still running past the upload timeout")
+		}
+		if got := uuidOf(tr.State(trackedActorUID).GetLatestLocal()); got != "s1" {
+			t.Errorf("latest_local after timeout = %q, want s1 kept", got)
 		}
 	})
 }

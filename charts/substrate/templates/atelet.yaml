@@ -148,6 +148,8 @@ spec:
         - --root=/var/lib/ate
         - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
         - --asset-staging-capacity=8Gi
+        - '--exchange-address={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:8445'
+        - '--exchange-server-name={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc'
         startupProbe:
           exec:
             command:
@@ -164,6 +166,10 @@ spec:
         resources:
 {{ toYaml .Values.objectStorePlugin.node.resources | indent 10 }}
         env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
 {{- include "substrate.storage.env" . | nindent 8 }}
 {{- with include "substrate.otel.env" . }}
 {{- . | trim | nindent 8 }}
@@ -171,10 +177,14 @@ spec:
         volumeMounts:
         - name: ate-base
           mountPath: /var/lib/ate
+          mountPropagation: HostToContainer
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
         - name: asset-staging
           mountPath: /var/lib/objectstore-plugin/asset-staging
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
       containers:
       - name: atelet
         image: {{ include "substrate.componentImage" (list "atelet" .) }}
@@ -254,6 +264,7 @@ spec:
           mountPath: /run/objectstore-plugin
         - name: ate-base
           mountPath: /var/lib/ate
+          mountPropagation: HostToContainer
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
           readOnly: true

@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,11 +25,14 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
@@ -36,6 +40,8 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 		name        string
 		seedState   ateapipb.ActorState
 		missingTmpl bool
+		// markActorForDeletion marks the actor before the call, as a failed delete would.
+		markActorForDeletion bool
 	}{
 		{
 			name:      "delete suspended actor succeeds",
@@ -46,8 +52,9 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 			seedState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
-			name:      "delete deleting actor succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_DELETING,
+			name:                 "delete deleting actor succeeds",
+			seedState:            ateapipb.ActorState_ACTOR_STATE_DELETING,
+			markActorForDeletion: true,
 		},
 		{
 			name:      "delete running actor succeeds",
@@ -78,6 +85,11 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 				tmplName = "missing-tmpl"
 			}
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", tmplName, tc.seedState)
+			if tc.markActorForDeletion {
+				if _, err := st.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil); err != nil {
+					t.Fatalf("MarkActorForDeletion: %v", err)
+				}
+			}
 
 			deleted, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{})
 			if err != nil {
@@ -93,8 +105,178 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 	}
 }
 
+// A deleted Node object counts as the node being gone for good, so revert and
+// delete do not wait for its atelet. A node that is still there may get its
+// atelet back, and a failed lookup proves nothing, so both stay retryable.
+func TestEnsureAteletTerminated_NodeGone(t *testing.T) {
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{AssignedNode: "node1"}}
+	for _, tc := range []struct {
+		name      string
+		nodes     []string
+		lookupErr error
+		wantErr   bool
+	}{
+		{name: "node gone", nodes: []string{"node2"}},
+		{name: "node still there", nodes: []string{"node1"}, wantErr: true},
+		{name: "node lookup fails", lookupErr: errors.New("connection refused"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newTestActorWorkflow(t, newTestPersistence(t), "team-a", "tmpl")
+			w.dialer = NewAteletDialer(newTestAteletIndexer(t), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
+				WithNodeGetter(nodeGetter(tc.lookupErr, tc.nodes...)))
+			err := w.ensureAteletTerminated(context.Background(), actorRef, actor, nil, "revert")
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("ensureAteletTerminated = %v, want error %v", err, tc.wantErr)
+			}
+			if tc.wantErr && !errors.Is(err, ErrNoAteletOnNode) {
+				t.Fatalf("ensureAteletTerminated = %v, want ErrNoAteletOnNode", err)
+			}
+			if tc.lookupErr != nil && !strings.Contains(err.Error(), tc.lookupErr.Error()) {
+				t.Fatalf("ensureAteletTerminated = %v, want the node lookup error in it", err)
+			}
+		})
+	}
+}
+
+// detachDeletePlugin is a volume plugin for a whole delete: it records
+// detaches like mockDetachVolumePlugin and accepts the volume delete.
+type detachDeletePlugin struct{ mockDetachVolumePlugin }
+
+func (*detachDeletePlugin) DeleteVolume(context.Context, string) error { return nil }
+
+// TestRevertAndDelete_AssignedNodeGone runs the whole revert and delete
+// workflows for a paused actor with a PENDING upload and a crashed actor whose
+// assigned node has no atelet (#2470). If the Node object is gone, both finish,
+// and revert clears assigned_node. If it still exists, both fail with
+// ErrNoAteletOnNode and leave the actor REVERTING or DELETING for a retry.
+// A volume detach on the gone node still runs: OK and NotFound from the plugin
+// count as detached, and any other error fails the step as before.
+func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
+	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	for _, tc := range []struct {
+		name      string
+		state     ateapipb.ActorState
+		paused    bool
+		nodeKept  bool
+		volume    bool
+		detachErr error
+		wantErr   error // ErrNoAteletOnNode for a kept node
+		// wantDetachErr expects the plugin's detach error back.
+		wantDetachErr bool
+	}{
+		{name: "paused, node gone", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, paused: true},
+		{name: "crashed, node gone", state: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+		{name: "paused, node kept", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, paused: true, nodeKept: true, wantErr: ErrNoAteletOnNode},
+		{name: "crashed, node kept", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, nodeKept: true, wantErr: ErrNoAteletOnNode},
+		{name: "node gone, volume detach OK", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, volume: true},
+		{name: "node gone, volume detach NotFound", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, volume: true, detachErr: status.Error(codes.NotFound, "no such node")},
+		{name: "node gone, volume detach fails", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, volume: true, detachErr: status.Error(codes.Internal, "instance not found"), wantDetachErr: true},
+	} {
+		for _, verb := range []string{"revert", "delete"} {
+			t.Run(tc.name+"/"+verb, func(t *testing.T) {
+				ctx := context.Background()
+				st, cleanup := storetest.SetupTestStore(t)
+				defer cleanup()
+				w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+				nodes := []string{"node-2"}
+				if tc.nodeKept {
+					nodes = append(nodes, "node-1")
+				}
+				w.dialer = NewAteletDialer(newTestAteletIndexer(t), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
+					WithNodeGetter(nodeGetter(nil, nodes...)))
+				plugin := &detachDeletePlugin{mockDetachVolumePlugin{detachErrs: map[string]error{"storage-vol-1": tc.detachErr}}}
+				w.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}}
+				tmpl := &ateapipb.ActorTemplate{
+					Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl-vol"},
+					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"},
+					Volumes:        []*ateapipb.Volume{{Name: "vol1"}},
+					Containers:     []*ateapipb.Container{{VolumeMounts: []*ateapipb.VolumeMount{{Name: "vol1"}}}},
+				}
+				if _, err := st.CreateActorTemplate(ctx, tmpl); err != nil {
+					t.Fatalf("create ActorTemplate: %v", err)
+				}
+
+				actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+				seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl-vol", tc.state)
+				actor, err := st.GetActor(ctx, actorRef)
+				if err != nil {
+					t.Fatalf("get seeded actor: %v", err)
+				}
+				mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
+					s.AssignedNode = "node-1"
+					s.LastAssignedGeneration = 1
+					s.Snapshots = []*ateapipb.Snapshot{newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "kept",
+						mustActorSnapshotURI(t, tmpl, actor, "kept").String(), completed)}
+					if tc.paused {
+						local := newPausedSnapshot(t, 2, memory, "", "local", "node-1")
+						local.DurableSnapshot.Object.SnapshotUri = mustActorSnapshotURI(t, tmpl, actor, "local").String()
+						s.LastAssignedGeneration = 2
+						s.Snapshots = append(s.Snapshots, local)
+					}
+					if tc.volume {
+						s.ExternalVolumes = &ateapipb.ExternalVolumes{Volumes: []*ateapipb.ExternalVolumeStatus{
+							{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"}}}
+					}
+				})
+
+				wantState := ateapipb.ActorState_ACTOR_STATE_REVERTING
+				if verb == "revert" {
+					_, err = w.RevertActor(ctx, actorRef)
+				} else {
+					wantState = ateapipb.ActorState_ACTOR_STATE_DELETING
+					_, err = w.DeleteActor(ctx, actorRef, store.DeletePreconditions{})
+				}
+				switch {
+				case tc.wantDetachErr:
+					if err == nil || !strings.Contains(err.Error(), "instance not found") {
+						t.Fatalf("%s = %v, want the detach error", verb, err)
+					}
+				case tc.wantErr != nil:
+					if !errors.Is(err, tc.wantErr) {
+						t.Fatalf("%s = %v, want %v", verb, err, tc.wantErr)
+					}
+				case err != nil:
+					t.Fatalf("%s: %v", verb, err)
+				}
+				if tc.volume {
+					if want := []detachCall{{VolumeID: "storage-vol-1", Node: "node-1"}}; !slices.Equal(plugin.detachCalls, want) {
+						t.Errorf("detach calls = %v, want %v", plugin.detachCalls, want)
+					}
+				}
+
+				got, getErr := st.GetActor(ctx, actorRef)
+				switch {
+				case tc.wantErr != nil || tc.wantDetachErr:
+					if getErr != nil {
+						t.Fatalf("get actor after failed %s: %v", verb, getErr)
+					}
+					if s := got.GetStatus(); s.GetState() != wantState || s.GetAssignedNode() != "node-1" {
+						t.Errorf("after failed %s: state %v, assigned node %q, want %v on node-1", verb, s.GetState(), s.GetAssignedNode(), wantState)
+					}
+				case verb == "revert":
+					if getErr != nil {
+						t.Fatalf("get actor after revert: %v", getErr)
+					}
+					if s := got.GetStatus(); s.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || s.GetAssignedNode() != "" {
+						t.Errorf("after revert: state %v, assigned node %q, want SUSPENDED with no node", s.GetState(), s.GetAssignedNode())
+					}
+					if snaps := got.GetStatus().GetSnapshots(); len(snaps) != 1 || snaps[0].GetGeneration() != 1 || snaps[0].GetDurableSnapshot().GetStatus() != completed {
+						t.Errorf("after revert: snapshots %v, want only the completed durable snapshot at generation 1", snaps)
+					}
+				default:
+					if !errors.Is(getErr, store.ErrNotFound) {
+						t.Errorf("get actor after delete = %v, want ErrNotFound", getErr)
+					}
+				}
+			})
+		}
+	}
+}
+
 // TestEnsureMarkedDeleting_AllStates checks that every actor state can be
-// marked DELETING.
+// marked DELETING, and that a second call leaves the marked actor unwritten.
 func TestEnsureMarkedDeleting_AllStates(t *testing.T) {
 	for _, seedState := range allActorStates {
 		t.Run(seedState.String(), func(t *testing.T) {
@@ -110,12 +292,23 @@ func TestEnsureMarkedDeleting_AllStates(t *testing.T) {
 				t.Fatalf("get seeded actor: %v", err)
 			}
 
-			updated, err := w.ensureMarkedDeleting(ctx, actorRef, actor)
+			updated, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{Version: actor.GetMetadata().GetVersion()})
 			if err != nil {
 				t.Fatalf("ensureMarkedDeleting failed: %v", err)
 			}
 			if got := updated.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
 				t.Errorf("ensureMarkedDeleting returned actor in %v, want DELETING", got)
+			}
+			if updated.GetMetadata().GetDeleteTime() == nil {
+				t.Error("ensureMarkedDeleting left delete_time unset")
+			}
+
+			again, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{})
+			if err != nil {
+				t.Fatalf("second ensureMarkedDeleting failed: %v", err)
+			}
+			if got, want := again.GetMetadata().GetVersion(), updated.GetMetadata().GetVersion(); got != want {
+				t.Errorf("second ensureMarkedDeleting moved the version to %d, want %d", got, want)
 			}
 		})
 	}
@@ -439,5 +632,77 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				t.Errorf("deleting the actor left %v under its own prefix, want everything it wrote collected", left)
 			}
 		})
+	}
+}
+
+// TestDeleteActorWorkflow_RetryKeepsAdmission fails a guarded delete partway
+// and retries it. The first attempt spends the version guard and stamps
+// delete_time. Retries keep that delete_time and write nothing until the delete
+// finishes.
+func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	objects := objectstoretest.New()
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, time.Minute, objectstoreplugintest.ControlClient(objects))
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	})
+	inFlight := mustActorSnapshotURI(t, &ateapipb.ActorTemplate{
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	}, actor, "abandoned")
+	objects.PutSnapshot(t, inFlight, "manifest.json")
+	observed := mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.LastAssignedGeneration = 1
+		s.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		}
+	})
+	// The guards a client sends after reading the actor.
+	guards := store.DeletePreconditions{UID: observed.GetMetadata().GetUid(), Version: observed.GetMetadata().GetVersion()}
+
+	objects.OnDelete = func(string, string) error { return errObjectStore }
+	if _, err := w.DeleteActor(ctx, actorRef, guards); !isObjectStoreErr(err) {
+		t.Fatalf("DeleteActor = %v, want it to report %v", err, errObjectStore)
+	}
+	admitted, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor after the failure: %v", err)
+	}
+	if admitted.GetMetadata().GetDeleteTime() == nil {
+		t.Fatal("a failed delete left delete_time unset")
+	}
+	if got := admitted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+		t.Fatalf("state after the failure = %v, want DELETING", got)
+	}
+
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{UID: guards.UID}); !isObjectStoreErr(err) {
+		t.Fatalf("retried DeleteActor = %v, want it to report %v", err, errObjectStore)
+	}
+	retried, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor after the retried failure: %v", err)
+	}
+	if got, want := retried.GetMetadata().GetVersion(), admitted.GetMetadata().GetVersion(); got != want {
+		t.Errorf("a retried delete moved the version to %d, want %d", got, want)
+	}
+
+	objects.OnDelete = nil
+	// The first attempt spent the version guard. The uid guard still holds.
+	if _, err := w.DeleteActor(ctx, actorRef, guards); apierror.Code(err) != codes.Aborted {
+		t.Fatalf("retry with the original version = %v, want ABORTED", err)
+	}
+	deleted, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{UID: guards.UID})
+	if err != nil {
+		t.Fatalf("retry with the uid alone: %v", err)
+	}
+	if !deleted.GetMetadata().GetDeleteTime().AsTime().Equal(admitted.GetMetadata().GetDeleteTime().AsTime()) {
+		t.Errorf("the retry re-stamped delete_time: %v, want %v", deleted.GetMetadata().GetDeleteTime().AsTime(), admitted.GetMetadata().GetDeleteTime().AsTime())
+	}
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); apierror.Code(err) != codes.NotFound {
+		t.Errorf("DeleteActor after the row is gone = %v, want NOT_FOUND", err)
 	}
 }

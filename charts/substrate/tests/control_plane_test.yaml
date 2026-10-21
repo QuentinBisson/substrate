@@ -191,9 +191,6 @@ tests:
       content: --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
   - contains:
       path: spec.template.spec.containers[0].args
-      content: --experimental-enable-authz=true
-  - contains:
-      path: spec.template.spec.containers[0].args
       content: --authz-bootstrap-owners=system:serviceaccount:custom-system:custom-ate-client
   - contains:
       path: spec.template.spec.containers[0].volumeMounts
@@ -207,19 +204,15 @@ tests:
         name: api-config
         configMap:
           name: custom-ate-api-config
-- it: configures operator ownership even with runtime enforcement disabled
+- it: configures operator ownership
   template: ate-api-server.yaml
   set:
-    ateApi.authorization.enabled: false
     ateApi.authorization.bootstrapOwners:
     - system:serviceaccount:operators:admin
   documentSelector:
     path: kind
     value: Deployment
   asserts:
-  - contains:
-      path: spec.template.spec.containers[0].args
-      content: --experimental-enable-authz=false
   - contains:
       path: spec.template.spec.containers[0].args
       content: --authz-bootstrap-owners=system:serviceaccount:operators:admin
@@ -274,7 +267,7 @@ tests:
     value: ClusterRole
   asserts:
   - equal:
-      path: rules[1]
+      path: rules[2]
       value:
         apiGroups: [ate.dev]
         resources: [workerpools, csidriverconfigs]

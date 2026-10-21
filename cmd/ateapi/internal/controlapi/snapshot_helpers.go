@@ -60,21 +60,14 @@ func findLatestDurableSnapshot(status *ateapipb.ActorStatus, storageStatus ateap
 	})
 }
 
-// findLatestLocalSnapshot returns the highest-generation Snapshot on status
-// that holds a completed local checkpoint (Locality != ""), or nil if none
-// exists.
+// findLatestLocalSnapshot returns the highest-generation snapshot with a local copy.
 func findLatestLocalSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 	return latestSnapshot(status, func(snap *ateapipb.Snapshot) bool {
 		return snap.GetLocality() != ""
 	})
 }
 
-// latestSnapshotIsLocal reports whether the snapshot at the actor's latest
-// generation is node-local: the shape a pause leaves behind, which atelet's
-// upload of the snapshot doesn't change. A paused actor is SUSPENDED with this
-// shape, and resumes only on the node named by Locality. A RUNNING actor
-// resumed from pause keeps the local snapshot too, so callers that need "at
-// rest" check the state as well.
+// latestSnapshotIsLocal reports whether the latest generation has a local copy.
 func latestSnapshotIsLocal(status *ateapipb.ActorStatus) bool {
 	return snapshotAtLatestGeneration(status).GetLocality() != ""
 }
@@ -98,13 +91,14 @@ func clearLocalSnapshots(status *ateapipb.ActorStatus) {
 // beforehand.
 //
 // Dropping PENDING durable snapshots is safe because:
-//   - On pause finalization, the new snapshot is kept with its PENDING copy.
-//     An earlier pause's PENDING copy is dropped: whatever atelet uploaded of
-//     it stays under the actor's prefix until DeleteActor collects it.
+//   - On asynchronous suspend finalization, the new snapshot is kept with its
+//     PENDING copy. An earlier asynchronous suspend's PENDING copy is dropped:
+//     whatever atelet uploaded of it stays under the actor's prefix until
+//     DeleteActor collects it.
 //   - On revert finalization, ensureInProgressSnapshotDiscarded has already
 //     deleted the objects of every PENDING durable snapshot.
-//   - On suspend finalization, the latest snapshot has already been marked
-//     COMPLETED.
+//   - On synchronous suspend finalization, the latest snapshot has already been
+//     marked COMPLETED.
 //
 // status.LastAssignedGeneration is not decreased so that we can keep track of
 // stale snapshots that need to be cleaned up and discarded generation numbers

@@ -71,7 +71,6 @@ See `values.yaml` for the full set; the important keys:
 | `objectStorePlugin.extraEnv` | `[]` | Object storage credentials/settings shared by both object-store plugins |
 | `objectStorePlugin.control.resources` / `objectStorePlugin.node.resources` | see `values.yaml` | Resources for the API and node object-store sidecars |
 | `ateApi.logLevel` | `info` | API server log level in its mounted config; one of `debug`, `info`, `warn`, or `error` |
-| `ateApi.authorization.enabled` | `true` | Enforce API authorization |
 | `ateApi.authorization.bootstrapOwners` | `[]` | Global owners; empty defaults to the release's shared `ate-client` ServiceAccount |
 | `ateApi.extraArgs` | `[]` | Additional command-line arguments appended to the ateapi defaults |
 | `otel.endpoint` | `""` | Set to an OTLP endpoint to export traces, metrics, the actor lifecycle events and the router access log |
@@ -92,8 +91,9 @@ memory values. Worker images are now named `ateworker-gvisor` and
 `ateworker-microvm`; update custom WorkerPools and image mirrors accordingly.
 
 Upgrade `substrate-crds` before the application chart. Custom `SandboxConfig`
-resources now put assets and `pauseImage` under `spec.versions[]`, with a named
-`spec.defaultVersion`. WorkerPools select the runtime through
+resources now put assets under `spec.versions[]`, with a named
+`spec.defaultVersion`. Remove `pauseImage` from custom configs; gVisor no longer
+uses a pause container. WorkerPools select the runtime through
 `spec.sandboxClasses[]`; remove `sandboxConfig` from actor templates.
 
 WorkerPools now resolve `spec.sandboxClasses[].configRef` or the class default
@@ -178,7 +178,8 @@ The API server now requires `--config-file`. The chart mounts its generated
 `ate-api-config` ConfigMap and rolls the API pods when `ateApi.logLevel` changes.
 Replace `--log-level` in `ateApi.extraArgs` with `ateApi.logLevel`.
 
-API authorization is enabled by default, matching `ate-setup`. The release's
+API authorization is always enforced, matching `ate-setup`. Remove
+`ateApi.authorization.enabled` from custom values. The release's
 shared `ate-client` ServiceAccount is a bootstrap global owner so demos and
 CLI access work. For shared installs, set `ateApi.authorization.bootstrapOwners`
 to your operators' own principals and grant tenant access with `kubectl ate
@@ -195,6 +196,8 @@ The pinned agentgateway image includes the updated `Actor.status`, actor-state,
 and `MintActorJwtRequest` bindings. If you override `images.agentgateway`, use
 these bindings too; older images cannot resolve actor routes or mint actor JWTs
 against this API.
+The image also preserves the requested actor port across HTTP/1 and HTTP/2
+CONNECT tunnels.
 
 Every checkpoint requires an object-storage URI, including a pause that
 keeps its snapshot local. The chart sets the cluster-wide snapshot location

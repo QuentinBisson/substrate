@@ -35,18 +35,19 @@ import (
 )
 
 // suspendMode selects which of the two suspends the suspend workflow runs.
-// Both take the same steps; the mode only decides the shape of the snapshot
-// they take.
+// Both take the same steps; the mode only decides when atelet uploads the
+// durable copy of the snapshot they take.
 type suspendMode int
 
 const (
 	// suspendSync makes the snapshot durable before the workflow returns:
-	// the actor ends SUSPENDED holding a durable snapshot.
+	// the actor ends SUSPENDED holding a COMPLETED durable snapshot (plus its
+	// node-local copy when atelet retains it on the worker's node).
 	suspendSync suspendMode = iota
-	// suspendAsync leaves the snapshot on the worker's node: the actor ends
+	// suspendAsync uploads the snapshot in the background: the actor ends
 	// SUSPENDED holding a node-local snapshot whose durable copy is still
-	// pending, pinned to that node until atelet uploads it in the background
-	// and the detach report unpins it.
+	// PENDING, pinned to that node until atelet finishes the upload and the
+	// detach report unpins it.
 	suspendAsync
 )
 
@@ -69,8 +70,8 @@ func (m suspendMode) uploadMode() ateletpb.UploadMode {
 
 // SuspendActor executes the workflow to suspend an actor. A running actor is
 // checkpointed on its worker: a sync suspend uploads the snapshot before
-// returning, an async suspend keeps it on that node. A SUSPENDED actor is
-// returned as it is, whatever the mode. Idempotent: a re-entered workflow
+// returning, an async suspend uploads it in the background. A SUSPENDED actor
+// is returned as it is, whatever the mode. Idempotent: a re-entered workflow
 // fast-forwards past the steps a previous attempt completed, deriving
 // progress from the persisted actor alone.
 func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (_ *ateapipb.Actor, err error) {
@@ -211,14 +212,13 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 
 // ensureAteletSuspended checkpoints the workload to the actor's persisted
 // in-progress snapshot location. A sync suspend has atelet upload it before
-// returning; an async suspend has atelet keep it on the node. It returns the
-// snapshot state atelet reports once the checkpoint is taken, which finalize
-// applies.
-// This is the atelet reentrancy seam (#372):
-// the request is keyed by the actor UID, the worker pod UID, and the
-// once-minted snapshot location, so a re-entered workflow re-sends the same
-// semantic request; once atelet's Checkpoint is idempotent on those keys this
-// step becomes fully reentrant with no changes here.
+// returning; an async suspend has atelet upload it in the background. It
+// returns the snapshot state atelet reports once the checkpoint is taken,
+// which finalize applies.
+// A re-entered workflow re-sends the same snapshot, which
+// ensureMarkedSuspending minted once, and atelet answers a Checkpoint of a
+// snapshot it already committed without checkpointing again, so a retry after
+// a lost response succeeds.
 func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, mode suspendMode) (wireFidelity string, state *ateletpb.ActorSnapshotState, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletSuspend")
 	defer func() { err = done(err) }()
@@ -312,9 +312,10 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 
 // ensureSuspendedFinalized releases the actor's worker (only when it is still
 // owned by this actor), records the in-progress snapshot as the actor's
-// durable snapshot (sync) or node-local snapshot with its PENDING durable copy
-// (async), and commits SUSPENDED with the assignment cleared in a single
-// update, then releases the durable snapshot that update replaced.
+// durable snapshot (sync, or async when atelet keeps only the durable copy) or
+// node-local snapshot with its PENDING durable copy (async), and commits
+// SUSPENDED with the assignment cleared in a single update, then releases the
+// durable snapshot that update replaced.
 // When the latest snapshot cannot be recorded, it commits CRASHED instead and
 // fails the step.
 // It re-reads the actor first so an out-of-band transition (e.g. the syncer
@@ -363,7 +364,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	}
 	// Both modes mark the durable copy PENDING up front. Without it a sync
 	// suspend has nothing to mark COMPLETED, and atelet's background upload of
-	// a pause's snapshot could never be recorded.
+	// an async suspend's snapshot could never be recorded.
 	if snapshotAtLatestGeneration(latestActor.GetStatus()).GetDurableSnapshot() == nil {
 		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
 	}
@@ -381,7 +382,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// 1. Free the worker (if it hasn't been freed yet)
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
 		t = time.Now()
-		_, released, err := releaseWorker(ctx, w.store, latestActor)
+		released, err := releaseWorker(ctx, w.store, latestActor)
 		dReleaseWorker = time.Since(t)
 		if err != nil {
 			return nil, err
@@ -402,20 +403,19 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		// The precondition makes toUpdate the version applied was built from.
 		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		snap := snapshotAtLatestGeneration(toUpdate.Status)
-		switch mode {
-		case suspendSync:
+		if mode == suspendSync {
 			snap.GetDurableSnapshot().Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-			// Remove all local snapshots since they are superseded by the new durable snapshot.
-			// TODO: This will change when an async suspend uploads its snapshot
-			// and both local and durable snapshots are kept.
-			pruneSnapshots(toUpdate.Status, nil)
-			toUpdate.Status.AssignedNode = ""
-		case suspendAsync:
-			// Record the node locality of the local checkpoint and clear older local checkpoints.
-			// AssignedNode is kept: a paused actor resumes on that node.
-			snap.Locality = toUpdate.GetStatus().GetAssignedNode()
-			pruneSnapshots(toUpdate.Status, snap)
 		}
+		durable := snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		// Keep the actor on the node that holds its snapshot. atelet holds an
+		// async suspend's snapshot until it detaches it, which it does only
+		// once the snapshot is durable.
+		if ateletKeptLocal(ateletState, snap) || !durable {
+			snap.Locality = toUpdate.GetStatus().GetAssignedNode()
+		} else {
+			toUpdate.Status.AssignedNode = ""
+		}
+		pruneSnapshots(toUpdate.Status, snap)
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	})
@@ -435,6 +435,16 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	w.releaseDroppedSnapshots(ctx, latestActor, storedActor)
 	dReleaseSnapshot = time.Since(t)
 	return storedActor, nil
+}
+
+// ateletKeptLocal reports whether atelet retained this checkpoint.
+func ateletKeptLocal(state *ateletpb.ActorSnapshotState, snap *ateapipb.Snapshot) bool {
+	local := state.GetLatestLocal().GetSnapshot()
+	uri := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	return local != nil && uri != "" &&
+		local.GetSnapshotUuid() == snap.GetUuid() &&
+		local.GetGeneration() == snap.GetGeneration() &&
+		local.GetObject().GetSnapshotUri() == uri
 }
 
 // releaseDroppedSnapshots releases each external snapshot that before records
