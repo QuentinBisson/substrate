@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ingressauth checks atenet-router's static-mtls client
-// authentication: who the ingress listeners let through, and who they turn
-// away. The other suites cover what happens once a client is let through,
-// since in static-mtls mode every one of them reaches its actors as the
-// allowlisted e2e router client.
+// Package ingressauth checks atenet-router's mTLS client authentication: who
+// the ingress listeners let through, and who they turn away. The other suites
+// cover what happens once a client is let through, since every one of them
+// reaches its actors as the allowlisted e2e router client.
 package ingressauth
 
 import (
@@ -56,27 +55,9 @@ var targetActor = resources.ActorRef{Atespace: "ate-e2e-ingressauth", Name: "nob
 
 // atenet-router's Service ports; see manifests/ate-install/atenet-router.yaml.
 const (
-	httpServicePort       = 80
 	httpsServicePort      = 443
-	connectServicePort    = 8081
 	connectTLSServicePort = 8444
 )
-
-// requireStaticMTLS skips the test unless the router was installed with
-// --ingress-auth-mode=static-mtls.
-//
-// Only needed until agent-gateway supports static-mtls mode as well.
-func requireStaticMTLS(t *testing.T) {
-	t.Helper()
-	if !e2e.IngressAuthModeSet() && e2e.IngressAuthModeRequired() {
-		t.Fatalf("%s is unset and required (CI or REQUIRE_INGRESS_AUTH_MODE is set): set it to %q or %q to match how atenet-router was installed (ATE_INGRESS_AUTH_MODE)",
-			e2e.IngressAuthModeEnv, e2e.IngressAuthStaticMTLS, e2e.IngressAuthDeprecatedInsecure)
-	}
-	if !e2e.IngressMTLS() {
-		t.Skipf("atenet-router does not require client certificates (%s=%q); install with --ingress-auth-mode=%s and set %s=%s to run this suite",
-			e2e.IngressAuthModeEnv, e2e.IngressAuthMode(), e2e.IngressAuthStaticMTLS, e2e.IngressAuthModeEnv, e2e.IngressAuthStaticMTLS)
-	}
-}
 
 // tlsListener is one of the router's TLS ingress listeners and how to send it
 // one request.
@@ -185,6 +166,12 @@ func isRemoteTLSAlert(err error) bool {
 	return errors.As(err, &opErr) && opErr.Op == "remote error"
 }
 
+// refusalAttempts bounds the tries one refused client gets, each on a fresh
+// port-forward. The router closes right after its alert, and the port-forward
+// or Go's HTTP/2 client sometimes reports that close first ("http2: client
+// conn could not be established"), so the alert never reaches the test.
+const refusalAttempts = 3
+
 // TestIngressAuthentication checks each kind of client against both TLS
 // listeners.
 //
@@ -192,9 +179,13 @@ func isRemoteTLSAlert(err error) bool {
 // shown to carry the allowlisted client through: a port-forward tears down its
 // whole tunnel once one forwarded connection fails, so a shared one would turn
 // every check after the first refusal into a dial error. The refusal itself
-// has to be a TLS alert from the router, which a broken tunnel cannot fake.
+// has to be a TLS alert from the router, which a broken tunnel cannot fake; a
+// failure without one is retried on a fresh port-forward, refusalAttempts
+// times at most.
 func TestIngressAuthentication(t *testing.T) {
-	requireStaticMTLS(t)
+	if !e2e.CurrentAtenetDataplane().AuthenticatesIngressClients() {
+		t.Skip("the atenet dataplane does not authenticate ingress clients")
+	}
 	ctx := context.Background()
 
 	allowed := e2e.RouterClientCertificate(t, ctx, e2e.RouterClientServiceAccount)
@@ -212,57 +203,30 @@ func TestIngressAuthentication(t *testing.T) {
 				{name: "allowlisted SPIFFE ID signed by an untrusted CA", cert: &foreign},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					address := forwardRouterPort(t, ctx, listener.servicePort)
+					for attempt := 1; ; attempt++ {
+						address := forwardRouterPort(t, ctx, listener.servicePort)
 
-					status, err := listener.request(ctx, address, routerTLSConfig(t, ctx, &allowed))
-					if err != nil {
-						t.Fatalf("allowlisted client %s got no response: %v", e2e.RouterClientSPIFFEID(e2e.RouterClientServiceAccount), err)
-					}
-					t.Logf("allowlisted client let through (status %d)", status)
+						status, err := listener.request(ctx, address, routerTLSConfig(t, ctx, &allowed))
+						if err != nil {
+							t.Fatalf("allowlisted client %s got no response: %v", e2e.RouterClientSPIFFEID(e2e.RouterClientServiceAccount), err)
+						}
+						t.Logf("allowlisted client let through (status %d)", status)
 
-					status, err = listener.request(ctx, address, routerTLSConfig(t, ctx, tc.cert))
-					if err == nil {
-						t.Fatalf("router let the client through (status %d); want the TLS handshake refused", status)
+						status, err = listener.request(ctx, address, routerTLSConfig(t, ctx, tc.cert))
+						if err == nil {
+							t.Fatalf("router let the client through (status %d); want the TLS handshake refused", status)
+						}
+						if isRemoteTLSAlert(err) {
+							t.Logf("refused: %v", err)
+							return
+						}
+						if attempt == refusalAttempts {
+							t.Fatalf("request failed without a TLS alert from the router %d times, so the refusal is unproven: %v", attempt, err)
+						}
+						t.Logf("attempt %d failed without a TLS alert from the router; retrying on a fresh port-forward: %v", attempt, err)
 					}
-					if !isRemoteTLSAlert(err) {
-						t.Fatalf("request failed without a TLS alert from the router, so the refusal is unproven: %v", err)
-					}
-					t.Logf("refused: %v", err)
 				})
 			}
-		})
-	}
-}
-
-// TestPlaintextListenersDisabled checks that static-mtls leaves nothing
-// listening on the plaintext ports, which could not authenticate a client.
-// The Service still publishes them; the router container no longer serves
-// them, so a request through either gets no response.
-func TestPlaintextListenersDisabled(t *testing.T) {
-	requireStaticMTLS(t)
-	ctx := context.Background()
-
-	for _, tc := range []struct {
-		name string
-		port int32
-	}{
-		{name: "http", port: httpServicePort},
-		{name: "connect", port: connectServicePort},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			address := forwardRouterPort(t, ctx, tc.port)
-			client := &http.Client{Timeout: 30 * time.Second}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			req.Header.Set(atenet.TargetActorHeader, targetActor.String())
-			resp, err := client.Do(req)
-			if err == nil {
-				resp.Body.Close()
-				t.Fatalf("plaintext port %d answered with status %d; want nothing listening", tc.port, resp.StatusCode)
-			}
-			t.Logf("no response: %v", err)
 		})
 	}
 }

@@ -75,10 +75,10 @@ const (
 var (
 	ignoreUID        = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
 	ignoreVersion    = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "version")
-	ignoreTimestamps = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time")
+	ignoreTimestamps = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time", "delete_time")
 
 	// ignoreServerMetadata skips the ResourceMetadata fields the store assigns.
-	ignoreServerMetadata = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid", "create_time", "update_time")
+	ignoreServerMetadata = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid", "create_time", "update_time", "delete_time")
 )
 
 type testContext struct {
@@ -532,8 +532,9 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 	}
 }
 
-// newPausedSnapshot is the snapshot a pause leaves on node locality: its
-// durable copy, under the actor's own prefix, is PENDING until atelet uploads it.
+// newPausedSnapshot is the snapshot an asynchronous suspend leaves on node
+// locality: its durable copy, under the actor's own prefix, is PENDING until
+// atelet uploads it.
 func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, actorUID, uuid, locality string) *ateapipb.Snapshot {
 	t.Helper()
 	uri, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, actorUID, uuid)
@@ -692,7 +693,6 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			WorkerPodUid:    string(createdPod.UID),
 			Ips:             []string{"127.0.0.1"},
 			NodeName:        nodeName,
-			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			// Capacity is not settable here: a Worker gets it from its own
 			// worker's report, which the reportWorkerCapacity below stands in

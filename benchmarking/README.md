@@ -23,14 +23,16 @@ scenario ladder, read [observability.md](observability.md).
 > [!IMPORTANT]
 > The ate-api-server checks every call against
 > [authorization](../docs/authorization.md), and Locust calls it as the
-> `benchmarking/default` ServiceAccount. Install Substrate with that identity
-> as a bootstrap owner, alongside the default `ate-client` owner, or every
-> benchmark call is denied:
+> `benchmarking/default` ServiceAccount. The Envoy ingress router also requires
+> an allowlist of client SPIFFE IDs at install time. Install Substrate with
+> `benchmarking/default` in both settings alongside the default `ate-client`
+> owner:
 > ```bash
 > ATE_API_AUTHZ_BOOTSTRAP_OWNERS=system:serviceaccount:ate-system:ate-client,spiffe://cluster.local/ns/benchmarking/sa/default \
->   ./hack/install-ate.sh --deploy-ate-system
+> ATE_INGRESS_ALLOWED_SPIFFE_IDS=spiffe://cluster.local/ns/benchmarking/sa/default \
+>   ./hack/install-ate.sh deploy ate-system
 > ```
-> The nightly automation sets this itself; see
+> The nightly automation sets both itself; see
 > [automation/README.md](automation/README.md).
 
 Note that deploying the benchmarks does not run them. You must visit Locust's
@@ -62,8 +64,8 @@ The same operations are also reachable from the top-level installer for
 convenience:
 
 ```bash
-./hack/install-ate.sh --deploy-benchmarks
-./hack/install-ate.sh --delete-benchmarks
+go run ./cmd/ate-setup deploy benchmarks
+go run ./cmd/ate-setup delete benchmarks
 ```
 
 `--skip-build` and `--worker-memory` are only available when invoking
@@ -74,8 +76,6 @@ convenience:
 `ate-setup` reads these settings in addition to those in
 [docs/operator-install.md](../docs/operator-install.md#settings), through the same
 flag, environment variable, and configuration document channels.
-`hack/install-ate.sh` forwards them as `--benchmark-worker-count`,
-`--benchmark-sandbox-class`, and `--benchmark-actor-memory`.
 
 | Key                      | Environment variable          | Flag                       | Default  | Applies to                               |
 |--------------------------|-------------------------------|----------------------------|----------|------------------------------------------|
@@ -154,7 +154,7 @@ and state restoration latency when a durable directory is attached to the actor.
   * `glutton-storage`: Attaches an external CSI volume instead of a durable
     directory. `deploy_locust.sh` and `workloads/deploy.sh` deploy it only
     when `--storage-class-name` names an existing StorageClass. To run it on
-    NFS, install with `hack/install-ate.sh --setup-csi=nfs` and pass
+    NFS, install with `hack/install-ate.sh setup csi nfs` and pass
     `--storage-class-name csi-nfs-sc`, the class the e2e tests also use.
 
 #### DurDir Reported Metrics
@@ -373,9 +373,10 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
   gap gets ±20% jitter so sessions don't move in lockstep.
 * `--resume-mode implicit|explicit` — implicit (default) lets the parked
   first request wake the actor; explicit issues ResumeActor before traffic.
-* `--lifecycle-mode suspend|pause|none` — durable suspend (default),
-  node-local pause between steps, or `none` to keep actors resident in memory
-  between steps without hibernating.
+* `--lifecycle-mode suspend|pause|none` — synchronous suspend (`suspend`,
+  default, uploads the snapshot before returning), asynchronous suspend
+  (`pause`, uploads the snapshot in the background), or `none` to keep actors
+  resident in memory between steps without hibernating.
 * `--agentsession-snapshot-steps` — comma-separated 1-based step numbers after
   which the actor is hibernated (for example, `3,10,20,30,40,50,61`); between
   all other steps the actor stays resident.
@@ -541,26 +542,26 @@ count users × `--actors-per-user`, not `--total-actors`.
 ### ResumePaused Benchmark
 
 The ResumePaused benchmark drives ate-api-server's cold resume path at a set
-rate. A cold resume here is a ResumeActor of a paused actor: ateapi takes the
+rate. A cold resume here is a ResumeActor of a suspended actor: ateapi takes the
 actor lease, binds a worker, and restores the actor from its snapshot. A
 ResumeActor of a running actor does none of that. Each user owns one actor
 from the `glutton` template. On its first iteration the user creates the actor
-and makes it cold with a resume and a pause; every later iteration resumes the
-actor and pauses it again, so every measured resume is cold.
+and makes it cold with a resume and a suspend; every later iteration resumes the
+actor and suspends it again, so every measured resume is cold.
 
 The warm-up runs in the step that added the user, unpaced, and is recorded
 under its own names.
 
 It sends no requests to the actors themselves, so it runs on the fake data
 plane, where it measures what a cold resume costs ate-api-server and Postgres
-without the router or the restore in the way. The pauses run at the resume
-rate, so a capacity it finds is one of resume and pause cycles, not of resumes
+without the router or the restore in the way. The suspends run at the resume
+rate, so a capacity it finds is one of resume and suspend cycles, not of resumes
 alone.
 
 Actors are named `rp-<uuid>` and deleted when boomer exits. If the atespace
 cannot be ensured, boomer exits at startup. An actor that fails to warm is
 deleted, and its user creates another on its next iteration. When a step lowers
-the user count, the actors of the stopped users stay paused, unused, until
+the user count, the actors of the stopped users stay suspended, unused, until
 boomer exits.
 
 #### ResumePaused Configuration Knobs
@@ -568,7 +569,7 @@ boomer exits.
 * `--target-rps`: Cold resumes per second the whole boomer process paces to
   (default `0`, unpaced). A `--ladder` step ending in `@target_rps`, as in
   `200:3m@1000`, changes it as the step starts. Keep the users at or above the
-  rate times the p99 of one resume plus one pause in seconds, or the step falls
+  rate times the p99 of one resume plus one suspend in seconds, or the step falls
   short of its rate.
 
 The web UI shows the same field.
@@ -590,6 +591,36 @@ warm-up until they have all joined at the spawn rate.
 * `CreateActor`, `ResumeActorWarmup`, `SuspendActorAsyncWarmup`: A user's
   warm-up of its actor, in the step that added the user.
 
+#### Analyzing a ResumePaused Ladder Run
+
+`stats.csv` and the other rows of `stats.jsonl` cover a whole run, so they
+blend every step of a ladder. After a ladder run the runner adds one
+`stats.jsonl` row per step, with `metric` `ladder_step_001`,
+`ladder_step_002`, and so on ([`locust/ladder_steps.py`](locust/ladder_steps.py)).
+It reads each step's start and end from the run's log and queries the
+benchmarking Prometheus over the step's steady window, from 30 s after the
+step starts to 5 s before it ends (`window_start` and `window_end`). A row
+holds the cold resume and pause rates, failures by operation
+(`failures_<name>`), client and server latency, the CPU and memory of
+ate-api-server, Postgres and fake-atelet, and Postgres's connections,
+commits and waits.
+
+The runner logs and skips a step with no end in the log and a step too short
+to leave a window after the trim. A failed query adds no step rows at all
+rather than a ladder with gaps, and leaves the run's other results as they
+are. Read a step's figures against its `target_rps`: a `resume_rps` below it
+means the step fell short of its rate.
+
+To pull the step rows out of a run's results:
+
+```bash
+RUN=<dest>/runs/<test>/run_date=<YYYY-MM-DD>/run_ts=<ts>/run_tag=<commit>
+gcloud storage cat "$RUN/stats.jsonl" | grep '"metric": "ladder_step_'
+```
+
+`<dest>` is the orchestrator's `--dest`, and its log has the full `RUN` path
+on each `Uploaded ... -> gs://...` line.
+
 ### Isolate Mode
 
 A real cold resume is limited by the node's restore capacity, which hides the
@@ -597,7 +628,7 @@ limits of ate-api-server and Postgres. Isolate mode takes the nodes out by
 installing substrate with a fake data plane:
 
 ```bash
-hack/install-ate.sh --deploy-ate-system --fake-data-plane
+hack/install-ate.sh deploy ate-system --fake-data-plane
 ./benchmarking/workloads/deploy.sh --deploy --worker-count 200 \
   --fake-atelet-env FAKE_ATELET_DELAY=500ms
 ```
@@ -636,8 +667,8 @@ Fake actors need neither. fake-atelet takes the storage settings of atelet's
 objectstore-plugin sidecar, whose writes it takes over, so its snapshot
 placeholders go to the storage the install points atelet at. The install
 refuses a cluster whose WorkerPools still have worker pods, which would
-outlive ate-controller. A normal `hack/install-ate.sh --deploy-ate-system`
-puts the real data plane back, and `--delete-ate-system` removes the fakes
+outlive ate-controller. A normal `hack/install-ate.sh deploy ate-system`
+puts the real data plane back, and `delete ate-system` removes the fakes
 either way. Never use the mode on a
 cluster that serves real actors: actors placed on fake Workers do not exist.
 
@@ -764,9 +795,9 @@ actually did, independent of what the load generator reported.
 * `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the
   same for `checkpoint_*`: how long the atelet took to resume or suspend an
   actor (`ate_actor_{restore,checkpoint}_duration`, `total` phase). Every
-  snapshot kind counts, as in the sizes: the actor's own snapshot, a
-  template's first start from its golden snapshot, and a pause. The buckets
-  reach 60s, so a slower operation reads as 60s.
+  snapshot kind counts, as in the sizes: the actor's own snapshot and a
+  template's first start from its golden snapshot. The buckets reach 60s, so a
+  slower operation reads as 60s.
 * `snapshots.checkpoints_in_window`, `checkpoints_cumulative`: checkpoint
   volume over the steady-state window, and since the atelet started.
 * `snapshots.checkpoint_mb_s`: bytes written per second spent checkpointing,

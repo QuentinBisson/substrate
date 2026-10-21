@@ -68,14 +68,14 @@ Other forms of tenancy:
 | Principle | Description | Status |
 | :--- | :--- | :--- |
 | **Untrusted Storage** | Persistence layers are treated as untrusted environments. Remote storage is protected with encryption. Local snapshot caching on storage attached to the node is multi-tenant and protected from cross-tenant attacks with encryption and strict filesystem permissions. | Met (Plugin isolation, SHA-256 asset verification)<br>Future (Per-Actor Encryption) |
-| **Dual-Party Snapshot Authorization** | Reading or writing snapshot storage requires dual-identity verification proving both the actor's identity and the node supervisor (`atelet`) operating on its behalf. Sandboxed guests cannot directly interact with snapshot storage. | Met (Supervisor-only storage access)<br>In Progress (Per-actor token exchange) |
+| **Dual-Party Snapshot Authorization** | Reading or writing snapshot storage requires dual-identity verification proving both the actor's identity and the node supervisor (`atelet`) operating on its behalf. Sandboxed guests cannot directly interact with snapshot storage. | Met (Supervisor-only storage access, Per-actor token exchange on GCS)<br>Future (Per-actor tokens on S3) |
 
 ### Network
 
 | Principle | Description | Status |
 | :--- | :--- | :--- |
 | **No Access by Default** | Sandboxed actors and worker nodes launch with default-deny networking and have zero network or API access to control plane services (`ate-api-server`, Kubernetes API servers, PostgreSQL state store). DNS is filtered against allowed policy hostnames. Every control plane pod in `ate-system` also denies [ingress by default](../manifests/ate-install/ate-system-networkpolicies.yaml), admitting only the flows the control plane needs. | Met (Loopback, private netns, link-local block, DNS relay filtering, ate-system NetworkPolicies) |
-| **Authenticated and Policy-Enforced Ingress** | Inbound invocations to actors terminate at authenticated edge routers (`atenet-router`), which authenticate callers and verify invocation policies before triggering on-demand actor cold-start or resume. | Met (atenet-router static-mtls, atunnel mTLS) |
+| **Authenticated and Policy-Enforced Ingress** | Inbound invocations to actors terminate at authenticated edge routers (`atenet-router`), which authenticate callers and verify invocation policies before triggering on-demand actor cold-start or resume. | Met (atenet-router mTLS, atunnel mTLS) |
 | **Fail-Closed Policy-Enforced Egress Gateway** | Outbound traffic is funneled through the multi-tenant egress proxy (`atenet-egress`), which validates actor identity, enforces destination host allowlists, executes TLS inspection or prompt filtering, and dynamically injects target credentials. If an egress policy enforcement point (PEP) is unconfigured/fails egress is dropped. Unsupported protocols are dropped, see [Egress Policy Table](https://docs.google.com/document/d/1XLCo9SMROddQzwsyEhdBNWuLYFtWWZWfYvGlIO1BcUI/edit?resourcekey=0-st2SqKp-O68nv5LeIUfA-g&tab=t.0#bookmark=id.pjnob1gppauk) for specifics. | Met (atenet-egress fail-closed PEP, DNS filtering, non-TCP drop) |
 
 ### Authorization

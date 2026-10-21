@@ -354,19 +354,17 @@ message Snapshot {
   // +k8s:format=k8s-uuid
   string actor_template_uid = 5;
 
-  // locality identifies the node holding this snapshot's files (currently the
-  // Kubernetes node name). Set when a local pause checkpoint completes, and
-  // cleared once the files are deleted from that node; a resume does not
-  // delete them.
+  // locality identifies the Kubernetes node holding this snapshot's files.
+  // Detach, revert, or a later checkpoint clears it. Resume keeps the files.
   //
   // +k8s:optional
   // +k8s:format=k8s-long-name
   string locality = 6;
 
   // durable_snapshot holds the durable storage representation of this snapshot.
-  // PENDING while the snapshot is uploaded, including a pause's snapshot that
-  // so far exists only on the node named by locality. COMPLETED once the
-  // upload is recorded.
+  // PENDING while the snapshot is uploaded, including an asynchronous suspend's
+  // snapshot that so far exists only on the node named by locality. COMPLETED
+  // once the upload is recorded.
   //
   // +k8s:optional
   SnapshotStorage durable_snapshot = 7;
@@ -375,7 +373,7 @@ message Snapshot {
   // taken.
   //
   // +k8s:optional
-  SandboxRuntime sandbox_runtime = 8;
+  ActorSandboxRuntime sandbox_runtime = 8;
 }
 
 // SnapshotFidelity orders the state layers a snapshot can hold, lowest to
@@ -477,6 +475,15 @@ message ResourceMetadata {
   // +k8s:optional
   // +k8s:update=NoUnset
   google.protobuf.Timestamp update_time = 6;
+
+  // delete_time is the time the resource started its deletion.
+  //
+  // This field is ignored on input.
+  //
+  // +k8s:optional
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  google.protobuf.Timestamp delete_time = 7;
 }
 
 // ExternalVolumes is the external volume state recorded on an actor, wrapped
@@ -623,6 +630,21 @@ message EgressPolicy {
   // +k8s:listType=atomic
   // +k8s:customValidation # no two rules tie on a name and port
   repeated EgressRule rules = 2;
+}
+
+// EgressPolicyTemplate defines an initial Actor egress policy without resource
+// metadata. Each rule has the same defaults, validation, and semantics as
+// EgressPolicy.rules.
+message EgressPolicyTemplate {
+  // Rules are an unordered set of allows, with the same precedence and effects
+  // as EgressPolicy.rules. At least one rule is required. Traffic is denied
+  // when no rule matches.
+  //
+  // +k8s:required
+  // +k8s:maxItems=256
+  // +k8s:listType=atomic
+  // +k8s:customValidation # no two rules tie on a name and port
+  repeated EgressRule rules = 1;
 }
 
 // EgressRule allows traffic for a given protocol and destination (host name
@@ -902,9 +924,9 @@ message ActorStatus {
   // +k8s:optional
   ActorCrash crash = 4;
 
-  // assigned_node is the Kubernetes node the Actor is currently attached to
-  // (hosting its active worker or its node-local snapshots). Unset when the
-  // Actor is detached from any node.
+  // assigned_node is the node hosting the Actor's worker or local snapshot.
+  // A suspended Actor remains attached while its local snapshot is kept.
+  // Detach or revert clears the binding.
   //
   // +k8s:optional
   // +k8s:format=k8s-long-name
@@ -920,7 +942,7 @@ message ActorStatus {
   repeated Snapshot snapshots = 6;
 
   // last_assigned_generation tracks the last snapshot generation assigned for
-  // this Actor during a Suspend or Pause request.
+  // this Actor during a Suspend request.
   // Even during Revert, the generation is not decreased to keep track of snapshots
   // that have become stale and need to be cleaned up.
   //
@@ -1014,7 +1036,7 @@ message WorkerAssignment {
   // was started or restored under on this Worker.
   //
   // +k8s:optional
-  SandboxRuntime sandbox_runtime = 9;
+  ActorSandboxRuntime sandbox_runtime = 9;
 
   // worker_spiffe_id is the SPIFFE ID worker_pod's certificate carries, copied
   // from Worker.worker_spiffe_id.
@@ -1170,6 +1192,18 @@ message ActorTemplate {
   // +k8s:customValidation # cpu and memory limits are both set
   ResourceRequirements resources = 6;
 
+  // Egress policy for the golden Actor during initialization. The template
+  // controller creates a policy with these rules through CreateActorEgressPolicy
+  // before it resumes the golden Actor. Other Actors created from this template
+  // do not inherit this policy, including when using the golden snapshot.
+  // If absent, no policy is created. When set, at least one rule is required.
+  // May not be set when snapshot_config.golden_snapshot_config.mode is DISABLED.
+  //
+  // +ate:preview=GoldenEgressPolicy
+  // +k8s:ifDisabled(GoldenEgressPolicy)=+k8s:forbidden
+  // +k8s:optional
+  EgressPolicyTemplate golden_egress_policy = 9;
+
   // +k8s:optional
   ActorTemplateStatus status = 7;
 }
@@ -1239,7 +1273,7 @@ message SnapshotConfig {
   string storage_location = 1;
 
   // preferred_fidelity is the highest fidelity the system packages when it
-  // snapshots the actor, on pause (node-local) and on suspend (uploaded).
+  // snapshots the actor.
   // It is a best-effort ceiling, not a guarantee: the system never packages
   // more than this level, and it may package less when a layer cannot be
   // captured or is too expensive to capture at the time, for example memory
@@ -1676,7 +1710,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
-  // +k8s:customValidation # volume_mounts must reference declared volumes
+  // +k8s:customValidation # volume_mounts must reference declared volumes; golden policy requires golden snapshots
   ActorTemplate actor_template = 1;
 }
 
@@ -2316,14 +2350,6 @@ message Worker {
   // +k8s:immutable
   string worker_spiffe_id = 8;
 
-  // sandbox_class mirrors the WorkerPool's default sandbox class
-  //
-  // +k8s:optional
-  // +k8s:maxLength=63
-  // +k8s:customValidation # gvisor or microvm
-  // +k8s:immutable
-  string sandbox_class = 9;
-
   // labels mirror the WorkerPool object's Kubernetes labels, which selectors
   // match against.
   // Kubernetes does not cap an object's label count, so the bound below is
@@ -2333,7 +2359,7 @@ message Worker {
   // +k8s:maxProperties=64
   // +k8s:eachKey=+k8s:format=k8s-label-key
   // +k8s:eachVal=+k8s:format=k8s-label-value
-  map<string, string> labels = 10;
+  map<string, string> labels = 9;
 
   // epoch counts the runs of the worker pod's worker container: 1 for its first
   // run and one more for each restart. 0 means it has not been reported.
@@ -2347,7 +2373,7 @@ message Worker {
   // +k8s:minimum=0
   // +k8s:update=NoUnset
   // +k8s:customValidation
-  int64 epoch = 11;
+  int64 epoch = 10;
 
   // Output-only server-managed state. Absent from Create/Update request
   // payloads; whatever a request carries here is ignored. A client moves
@@ -2355,7 +2381,7 @@ message Worker {
   // MarkWorkerUnavailable, and the assignments are the scheduler's.
   //
   // +k8s:optional
-  WorkerStatus status = 12;
+  WorkerStatus status = 11;
 }
 
 enum WorkerState {
@@ -2404,25 +2430,66 @@ message WorkerStatus {
   // +k8s:minimum=0
   int64 observed_epoch = 4;
 
-  // Runtime that new and cold-booted actors start under, as reported by the
-  // Worker at registration. Snapshots matching default_runtime can also
-  // warm-boot on this worker.
+  // The sandbox classes this Worker runs and the runtimes it runs them
+  // under, as reported by the Worker at registration; empty until then, and
+  // nothing is placed on the Worker until then. One entry today, like
+  // WorkerPoolSpec.sandboxClasses. Its sandbox_class is the Worker's class,
+  // fixed by the first RegisterWorker call.
   //
   // +k8s:optional
-  SandboxRuntime default_runtime = 5;
+  // +k8s:maxItems=1 # keep in sync with WorkerPoolSpec.sandboxClasses
+  // +k8s:listType=map
+  // +k8s:listMapKey=sandbox_class
+  repeated WorkerSandboxClass sandbox_classes = 5;
+}
 
-  // Additional runtimes (excluding default_runtime) that this worker can
-  // restore snapshots from right now.
+// WorkerSandboxClass is one sandbox class a Worker runs, with the runtimes
+// it runs it under. A Worker has one entry per WorkerPool sandboxClasses
+// entry, so exactly one today.
+message WorkerSandboxClass {
+  // e.g. "gvisor", "microvm", as on WorkerPool.spec.sandboxClasses[].name.
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
+  string sandbox_class = 1;
+
+  // Runtime new and cold-booted actors of this class start under. Snapshots
+  // matching its version can also warm-boot on this worker.
+  //
+  // +k8s:required
+  WorkerSandboxRuntime default_runtime = 2;
+
+  // Additional runtimes of this class (excluding default_runtime) that this
+  // worker can restore snapshots from right now.
   //
   // +k8s:optional
   // +k8s:maxItems=32
   // +k8s:listType=atomic
-  repeated SandboxRuntime restorable_runtimes = 6;
+  repeated WorkerSandboxRuntime restorable_runtimes = 3;
 }
 
-// SandboxRuntime describes a sandbox runtime and its compatibility identity as
-// reported by a Worker or recorded on a snapshot.
-message SandboxRuntime {
+// WorkerSandboxRuntime is one runtime a Worker runs for the class of its
+// WorkerSandboxClass entry. ActorSandboxRuntime, the stamp on an assignment
+// or snapshot, pairs the entry's sandbox_class with this runtime's version.
+message WorkerSandboxRuntime {
+  // Compatibility version stamped onto an actor's snapshot when a checkpoint
+  // is taken on this runtime. Snapshots matching it can warm-boot on this
+  // runtime.
+  // TODO: Add the additional compatibility versions this runtime can also
+  // restore snapshots from.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 1;
+
+  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
+  // once workers report one.
+}
+
+// ActorSandboxRuntime is the runtime an actor runs under, as recorded on its
+// assignment and on the snapshots taken from it: one class and one of the
+// compatibility versions a Worker reports for it.
+message ActorSandboxRuntime {
   // e.g. "gvisor", "microvm"
   //
   // +k8s:required
@@ -2430,10 +2497,8 @@ message SandboxRuntime {
   // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
-  // Primary compatibility version stamped onto an actor's snapshot when a
-  // checkpoint is taken on this runtime. Snapshots matching `version`
-  // can warm-boot on this runtime.
-  // TODO: Add support for additional compatibility versions.
+  // Compatibility version of the runtime. A snapshot stamped with it can
+  // warm-boot on a worker whose runtime of this class matches it.
   //
   // +k8s:required
   VersionedSandboxCompat version = 2;
@@ -2443,7 +2508,7 @@ message SandboxRuntime {
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for a SandboxRuntime.
+// key-value compatibility attributes of a sandbox runtime.
 message VersionedSandboxCompat {
   // Compatibility schema version (e.g. "v1") defining which runtime and
   // hardware attributes are recorded and how they are computed.
@@ -2581,7 +2646,7 @@ service WorkerService {
   // The control plane mints only for the Worker that the Actor is assigned
   // to, and only to an atelet on that Worker's node. A request from any
   // other node or Worker gets NotFound; one from the assigned Worker with a
-  // stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a paused Actor
+  // stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a SUSPENDED Actor
   // gets NotFound, since it has no Worker to bind the certificate to.
   rpc MintWorkerActorCertificate(MintWorkerActorCertificateRequest) returns (MintWorkerActorCertificateResponse);
 
@@ -2604,7 +2669,7 @@ service WorkerService {
   //
   // This is a request, not a command. It runs the same suspend workflow
   // Control.SuspendActor runs, behind the same preconditions, so a proposal
-  // that races a resume, pause, or delete loses to it.
+  // that races a resume, suspend, or delete loses to it.
   //
   // atelet calls this with its own client certificate, as it does for
   // RegisterWorker, naming the Worker its caller proved itself to be. The
@@ -2658,20 +2723,17 @@ message RegisterWorkerRequest {
   // +k8s:required
   WorkerResources capacity = 2;
 
-  // Runtime that new and cold-booted actors start under.
-  // Snapshots matching default_runtime can also warm-boot on this worker.
+  // The sandbox classes this worker runs and the runtimes it runs them
+  // under. The first registration fixes the Worker's sandbox class; later
+  // reports replace the runtimes, but an entry of another class is refused.
   // Like capacity, this replaces what is recorded on the Worker.
   //
   // +k8s:required
-  SandboxRuntime default_runtime = 3;
-
-  // Additional runtimes (excluding default_runtime) that this worker can
-  // restore snapshots from right now.
-  //
-  // +k8s:optional
-  // +k8s:maxItems=32
-  // +k8s:listType=atomic
-  repeated SandboxRuntime restorable_runtimes = 4;
+  // +k8s:minItems=1
+  // +k8s:maxItems=1 # keep in sync with WorkerPoolSpec.sandboxClasses
+  // +k8s:listType=map
+  // +k8s:listMapKey=sandbox_class
+  repeated WorkerSandboxClass sandbox_classes = 3;
 }
 
 message RegisterWorkerResponse {

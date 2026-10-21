@@ -316,6 +316,30 @@ func TestHelmObjectStorePlugins(t *testing.T) {
 				if mode == "node" && (!slices.Contains(plugin.Args, "--root=/var/lib/ate") || !slices.ContainsFunc(plugin.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == "ate-base" && m.MountPath == "/var/lib/ate" })) {
 					t.Error("node plugin cannot access snapshot files")
 				}
+				if mode == "node" {
+					for _, arg := range []string{"--exchange-address=test-api.custom.svc:8445", "--exchange-server-name=test-api.custom.svc"} {
+						if !slices.Contains(plugin.Args, arg) {
+							t.Errorf("node plugin is missing %s", arg)
+						}
+					}
+					if !slices.ContainsFunc(plugin.Env, func(e corev1.EnvVar) bool {
+						return e.Name == "POD_NAMESPACE" && e.ValueFrom != nil && e.ValueFrom.FieldRef != nil && e.ValueFrom.FieldRef.FieldPath == "metadata.namespace"
+					}) {
+						t.Error("node plugin is missing its namespace")
+					}
+					if !slices.ContainsFunc(plugin.VolumeMounts, func(m corev1.VolumeMount) bool {
+						return m.Name == "servicedns-ca" && m.MountPath == "/run/servicedns.podcert.ate.dev" && m.ReadOnly
+					}) {
+						t.Error("node plugin cannot verify the exchange certificate")
+					}
+					for _, container := range append(pod.Containers, plugin) {
+						if !slices.ContainsFunc(container.VolumeMounts, func(m corev1.VolumeMount) bool {
+							return m.Name == "ate-base" && m.MountPropagation != nil && *m.MountPropagation == corev1.MountPropagationHostToContainer
+						}) {
+							t.Errorf("%s cannot see mounts created after startup", container.Name)
+						}
+					}
+				}
 				found[mode] = true
 			}
 			for _, name := range []string{"issuer", "control", "node"} {

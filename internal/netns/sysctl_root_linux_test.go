@@ -73,7 +73,7 @@ func TestSetSysctlConcurrent(t *testing.T) {
 			<-start
 			for range 64 {
 				for _, value := range []string{"0", "1024"} {
-					if err := setSysctl("net/ipv4/ip_unprivileged_port_start", value); err != nil {
+					if err := SetSysctls(Sysctl{Key: "net/ipv4/ip_unprivileged_port_start", Value: value}); err != nil {
 						t.Error(err)
 						return
 					}

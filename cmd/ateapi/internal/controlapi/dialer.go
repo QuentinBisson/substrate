@@ -15,6 +15,7 @@
 package controlapi
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -36,6 +37,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/lru"
 )
@@ -54,6 +56,9 @@ type ateletConn struct {
 // AteletDialer handles gRPC connections to Atelet pods.
 type AteletDialer struct {
 	ateletIndexer cache.Indexer
+	// getNode, when set, reads a node from the API server. NodeGone uses it to
+	// tell a deleted node from an atelet that is only missing for now.
+	getNode func(ctx context.Context, nodeName string) error
 	// mu makes the lookup, stale eviction and insert in DialForAteletOnNode
 	// atomic, so concurrent callers cannot evict each other's fresh conn.
 	mu sync.Mutex
@@ -78,6 +83,30 @@ func WithDialCredentials(build func(expectedPodUID string) (credentials.Transpor
 // WithInsecureCredentials disables transport security for local clusters without Pod Certificates.
 func WithInsecureCredentials() DialerOption {
 	return WithDialCredentials(func(string) (credentials.TransportCredentials, error) { return insecure.NewCredentials(), nil })
+}
+
+// WithNodeGetter sets how NodeGone reads a node. getNode returns the API
+// server's error, so a NotFound error means that the node is deleted.
+func WithNodeGetter(getNode func(ctx context.Context, nodeName string) error) DialerOption {
+	return func(d *AteletDialer) { d.getNode = getNode }
+}
+
+// NodeGone reports whether nodeName is deleted from the cluster and no atelet
+// pod is known on it. It reads the node live, so a stale cache cannot report a
+// node as gone. Without a node getter it always reports false.
+func (d *AteletDialer) NodeGone(ctx context.Context, nodeName string) (bool, error) {
+	if d.getNode == nil {
+		return false, nil
+	}
+	if err := d.getNode(ctx, nodeName); !apierrors.IsNotFound(err) {
+		return false, err // nil when the node exists
+	}
+	// An atelet that registered while the node was read means the node is back.
+	atelets, err := d.ateletIndexer.ByIndex(byNode, nodeName)
+	if err != nil {
+		return false, fmt.Errorf("while finding atelet on node %q: %w", nodeName, err)
+	}
+	return len(atelets) == 0, nil
 }
 
 // NewAteletDialer creates a new AteletDialer. clientBundlePath and serverCAPath

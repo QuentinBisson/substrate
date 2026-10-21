@@ -25,6 +25,9 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get"]
 - apiGroups: ["ate.dev"]
   resources: ["workerpools", "csidriverconfigs"]
   verbs: ["get", "watch", "list"]
@@ -140,7 +143,6 @@ spec:
         - "--grpc-listen-addr=0.0.0.0:443"
         - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
         - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
-        - {{ printf "--experimental-enable-authz=%t" .Values.ateApi.authorization.enabled | quote }}
         - {{ printf "--authz-bootstrap-owners=%s" (join "," (.Values.ateApi.authorization.bootstrapOwners | default (list (printf "system:serviceaccount:%s:%s" .Release.Namespace (include "substrate.fullname" (list "ate-client" .)))))) | quote }}
         - "--authentication-config=/etc/ateapi/authentication/authentication.yaml"
         - "--postgres-read-write-connection-string=@env"

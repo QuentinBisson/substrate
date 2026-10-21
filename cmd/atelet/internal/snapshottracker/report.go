@@ -118,8 +118,8 @@ func (t *Tracker) cancelReportLocked(a *actorSnapshots) {
 }
 
 // queueReportLocked queues the actor's report, if one is due. While a Run,
-// Restore, Checkpoint, or PromoteSnapshot holds the actor, it defers the
-// report until the hold ends.
+// Restore, Checkpoint, PromoteSnapshot, or Terminate holds the actor, it
+// defers the report until the hold ends.
 func (t *Tracker) queueReportLocked(a *actorSnapshots) {
 	if t.reporting.reporter == nil || !a.reportDue() {
 		return
@@ -182,7 +182,7 @@ func (t *Tracker) waitReportQueue(delay time.Duration) bool {
 // returns how long the report queue should pause before the next report. A
 // report the control plane acknowledges or refuses is no longer due, unless a
 // background change was made while it ran. Any other failure is retried after
-// a backoff, until a commit or detach cancels it or giveUpAfter has passed
+// a backoff, until a commit cancels it or giveUpAfter has passed
 // since the report became due; a failure other than Aborted also backs off
 // the whole report queue.
 func (t *Tracker) report(actorUID string) time.Duration {
@@ -243,7 +243,7 @@ func jitteredReportDelay(d time.Duration) time.Duration {
 
 // beginReport returns the actor, the state to report for it, and when the
 // report became due, or false when no report is due or a Run, Restore,
-// Checkpoint, or PromoteSnapshot of the actor is in progress.
+// Checkpoint, PromoteSnapshot, or Terminate of the actor is in progress.
 func (t *Tracker) beginReport(actorUID string) (resources.ActorRef, *ateletpb.ActorSnapshotState, time.Time, bool) {
 	if !t.locks.Lock(t.ctx, actorUID) {
 		// atelet is shutting down.
@@ -256,8 +256,9 @@ func (t *Tracker) beginReport(actorUID string) (resources.ActorRef, *ateletpb.Ac
 		return resources.ActorRef{}, nil, time.Time{}, false
 	}
 	if a.hold != holdNone {
-		// A Run, Restore, Checkpoint, or PromoteSnapshot of the actor is in
-		// progress, and queues the report when it ends (see holdLocked).
+		// A Run, Restore, Checkpoint, PromoteSnapshot, or Terminate of the
+		// actor is in progress, and queues the report when it ends (see
+		// holdLocked).
 		a.reportDeferred = true
 		return resources.ActorRef{}, nil, time.Time{}, false
 	}
@@ -284,7 +285,7 @@ func (t *Tracker) endReport(actorUID string, sent *ateletpb.ActorSnapshotState) 
 }
 
 // retryReport schedules another attempt to send the report that became due at
-// dueSince after err, unless a commit or detach canceled it, a newer
+// dueSince after err, unless a commit canceled it, a newer
 // background change replaced it, or giveUpAfter has passed.
 func (t *Tracker) retryReport(actorUID string, dueSince time.Time, attrs []any, err error) {
 	t.lock(actorUID)
