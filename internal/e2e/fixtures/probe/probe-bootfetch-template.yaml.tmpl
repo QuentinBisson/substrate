@@ -52,7 +52,9 @@ volumes:
         - field: ACTOR_METADATA_FIELD_NAME
           path: actor-id
 ${TEMPLATE_TRUST_BUNDLE}
-${TEMPLATE_RESOURCES}
-${TEMPLATE_SANDBOX_CONFIG}
+resources:
+  limits:
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
 snapshotConfig:
-  storageLocation: gs://${BUCKET_NAME}/ate-e2e-probe${FIXTURE_SUFFIX}-bootfetch/
+  storageLocation: gs://${BUCKET_NAME}/ate-e2e-probe-bootfetch${FIXTURE_SUFFIX}/
