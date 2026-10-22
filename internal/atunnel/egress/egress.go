@@ -289,10 +289,9 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 	}
 	if active.dialer == nil {
 		e.mu.Unlock()
-		// From inside the sandbox this is a connection that opens and closes at
-		// once, indistinguishable from a network failure. Debug, since the actor
-		// sets the rate and an actor without a gateway gets here on every
-		// connection.
+		// The actor sees this as a connection that closes right away, like a
+		// network failure. This logs at Debug because an actor without an
+		// egress gateway hits this on every outbound connection.
 		slog.DebugContext(active.ctx, "atunnel dropped an egress connection: actor egress is not active",
 			slog.String("actorUID", active.actorUID))
 		_ = downstream.Close()
