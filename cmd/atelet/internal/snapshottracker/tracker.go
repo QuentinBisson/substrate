@@ -77,7 +77,8 @@ type Store interface {
 //     actor to that operation's end, which queues it again.
 //  5. An upload leaves LatestLocal on disk so a same-node Restore still
 //     reads it. A detach, in the background or via Detach, makes LatestLocal
-//     durable and then deletes all the actor's local snapshots.
+//     durable and then deletes all the actor's local snapshots and its other
+//     files on this node except snapshot-state.json.
 //  6. A Run or Restore unschedules the actor's detach as it begins
 //     (BeginStart), and saves that before the workload can start, so atelet
 //     does not detach an actor whose start has begun, even after a restart or
@@ -97,9 +98,13 @@ type Store interface {
 //     startup window, send the actor's whole state through the Reporter, and
 //     retry with per-actor and queue-wide backoff until the control plane
 //     acknowledges or refuses it, a call cancels it, or reporting.giveUpAfter
-//     passes. A report waits while a Run, Restore, Checkpoint,
-//     PromoteSnapshot, or Terminate is in progress, and a background change
-//     made while a report ran is reported again.
+//     passes. Once a detach's report is acknowledged or refused with NotFound
+//     (and the actor has not started again), atelet removes the actor's
+//     snapshot state file and directory; on give-up or any other refusal the
+//     state file stays so Detach keeps returning LatestDurable. A report waits
+//     while a Run, Restore, Checkpoint, PromoteSnapshot, or Terminate is in
+//     progress, and a background change made while a report ran is reported
+//     again.
 //
 // Detach runs under the tracker's context rather than on a worker, so an
 // explicit control-plane call does not wait behind other actors' background
@@ -146,6 +151,11 @@ type Tracker struct {
 	store Store
 	// clock is what due times are measured on, and the queues wait on.
 	clock clock.WithTicker
+	// fromCurrentBoot reports whether an actor's local snapshot was written
+	// since the node last booted, or is nil without WithBootCheck. When set,
+	// atelet deletes any local snapshot written before the node rebooted (see
+	// prunePreRebootLocalLocked).
+	fromCurrentBoot func(actorUID, snapshotUUID string) bool
 	// uploadDelay is how long after UndurableSince the actor's latest local
 	// snapshot becomes due for background upload: DefaultUploadDelay unless
 	// WithUploadDelay sets it.
@@ -218,6 +228,16 @@ type Tracker struct {
 // Option configures a Tracker.
 type Option func(*Tracker)
 
+// WithBootCheck sets how atelet tells whether an actor's local snapshot was
+// written since the node last booted. A snapshot whose local copy is gone must
+// count as written before. With it, atelet deletes any local snapshot written
+// before the node rebooted, whose files may be torn.
+func WithBootCheck(fromCurrentBoot func(actorUID, snapshotUUID string) bool) Option {
+	return func(t *Tracker) {
+		t.fromCurrentBoot = fromCurrentBoot
+	}
+}
+
 // WithUploadDelay sets how long after the oldest snapshot of an actor not yet
 // durable was taken atelet uploads the actor's latest local snapshot.
 func WithUploadDelay(d time.Duration) Option {
@@ -289,7 +309,6 @@ func WithReporter(r Reporter) Option {
 }
 
 // WithReportWorkers sets how many background reports run at once on this node.
-// Zero disables background reporting.
 func WithReportWorkers(n int) Option {
 	return func(t *Tracker) {
 		t.reporting.workers = n
@@ -328,9 +347,6 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 	}
 	for _, opt := range opts {
 		opt(t)
-	}
-	if t.reporting.workers <= 0 {
-		t.reporting.reporter = nil
 	}
 	if t.instruments != nil {
 		t.undurableActorsTally = newUndurableActorsTally(clk, t.uploadDelay, t.store != nil)

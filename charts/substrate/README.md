@@ -122,6 +122,12 @@ verifying and publishing them. `ATE_STORAGE_BACKEND` must not be set on the
 API server or atelet itself; select it through `atelet.storageBackend`.
 RustFS is wired automatically. Private S3 asset URLs must use `s3://`.
 
+GCS snapshot transfers now require `objectStorePlugin.transferServiceAccount`,
+the email of a dedicated Google service account. Grant it object access to the
+snapshot bucket, and let the API server's identity impersonate it. See
+[the GCP setup guide](../../tools/setup-gcp/README.md#what-create-iam-actually-grants)
+for the required IAM grants. S3 and RustFS do not need this setting.
+
 The default gVisor config now uses the 2026-10-17 nightly (`v4`) for separate
 container-rootfs and durable-directory checkpoint bundles. Upgrade the sandbox config together with ateworker-gvisor;
 custom configs must pin a release with the same checkpoint support and supply

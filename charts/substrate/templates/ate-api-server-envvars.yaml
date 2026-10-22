@@ -34,5 +34,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   ATE_API_SNAPSHOT_LOCATION: {{ $snapshotLocation | quote }}
+  ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT: {{ .Values.objectStorePlugin.transferServiceAccount | quote }}
   ATE_API_POSTGRES_SCHEMA: {{ .Values.postgres.schema | quote }}
   ATE_API_ACTOR_JWT_ISSUER: {{ include "substrate.actorJWTIssuer" . | quote }}
