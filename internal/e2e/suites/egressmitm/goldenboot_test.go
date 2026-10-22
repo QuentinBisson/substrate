@@ -34,10 +34,15 @@ var bootFetchManifests = e2e.SubstrateFixtureManifests{
 // golden snapshot only if the worker tunneled the golden actor's egress
 // before the wakeup probe and the gateway admitted the actor while it was
 // still resuming. The template's goldenEgressPolicy gives the golden actor its
-// policy before the controller resumes it. An actor restored from that snapshot then has to fetch again
-// as itself before its wakeup probe passes, which covers the restore paths.
+// policy before the controller resumes it. An actor restored from that
+// snapshot then has to fetch again as itself before its wakeup probe passes,
+// which covers the restore paths.
 //
-//	hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -run TestGoldenBootEgress -v -args --no-color
+// goldenEgressPolicy is a preview feature: install the cluster with its gate
+// and pass the gate to the suite, which skips the test otherwise.
+//
+//	ATE_PREVIEW=GoldenEgressPolicy hack/install-ate-kind.sh
+//	hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -run TestGoldenBootEgress -v -args --no-color --preview=GoldenEgressPolicy
 func TestGoldenBootEgress(t *testing.T) {
 	e2e.RequirePreview(t, preview.GateGoldenEgressPolicy)
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")

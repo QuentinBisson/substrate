@@ -357,11 +357,6 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// fd-backed, so CH needs fresh tap FDs (net_fds) on restore. The caller
 	// unhosts on failure, once the defers here have stopped the actor's
 	// processes.
-	// As in coldBootActor: egress before the VM restores, ingress after the
-	// wakeup probe.
-	if err := s.tunnel.ActivateEgress(p.attribution(), egress); err != nil {
-		return err
-	}
 	netDevs, err := ch.SnapshotNetDevices(restoreDir)
 	if err != nil {
 		return fmt.Errorf("while reading snapshot net devices: %w", err)
@@ -467,6 +462,15 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		return restoreGuestReadyError(ctx, "reseeding guest CRNG", err)
 	}
 	tReseeded := time.Now()
+
+	// Egress after the reseed, so nothing leaves the host drawn from CRNG state
+	// the actor shares with the snapshot's other clones, and so a failure above
+	// is still safe to retry (see restoreGuestReadyError). The restored workload
+	// is past its boot, so it needs egress only from the wakeup probe on.
+	// Ingress follows the wakeup probe, as in coldBootActor.
+	if err := s.tunnel.ActivateEgress(p.attribution(), egress); err != nil {
+		return err
+	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
 	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
@@ -590,8 +594,9 @@ func (s *AteWorkerService) cleanupFailedRestoreRootfs(ctx context.Context, actor
 // the agent is dialed and the CRNG reseeded (up to about 15s plus
 // reseedTimeout). Nothing routes inbound traffic to it yet (not even the wakeup
 // probe), and atunnel's egress proxy closes its outbound TCP connections until
-// tunnel.Activate, but a background task in the guest can query the DNS relay
-// or write to its filesystems. The retry re-extracts the rootfs upper and
+// tunnel.ActivateEgress, which restoreMemoryFidelity calls after the reseed for
+// that reason, but a background task in the guest can query the DNS relay or
+// write to its filesystems. The retry re-extracts the rootfs upper and
 // durable-dir volumes from the snapshot, whereas a CSI volume is outside the
 // snapshot and keeps any writes made during that window while guest memory and
 // its page cache resume from the snapshot; we accept that narrow window over

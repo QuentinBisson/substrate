@@ -57,6 +57,7 @@ type Proxy struct {
 }
 
 type activation struct {
+	actorUID          string
 	dialer            tunnelDialer
 	certificateSource actorCertificateSource
 	expiresAt         time.Time
@@ -109,7 +110,7 @@ func (e *Proxy) activationLocked(actorUID string) *activation {
 	active := e.active[actorUID]
 	if active == nil {
 		ctx, cancel := context.WithCancel(context.Background())
-		active = &activation{ctx: ctx, cancel: cancel}
+		active = &activation{actorUID: actorUID, ctx: ctx, cancel: cancel}
 		e.active[actorUID] = active
 	}
 	return active
@@ -289,9 +290,11 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 	if active.dialer == nil {
 		e.mu.Unlock()
 		// From inside the sandbox this is a connection that opens and closes at
-		// once, indistinguishable from a network failure.
-		slog.WarnContext(active.ctx, "atunnel dropped an egress connection: actor egress is not active",
-			slog.String("peer", downstream.RemoteAddr().String()))
+		// once, indistinguishable from a network failure. Debug, since the actor
+		// sets the rate and an actor without a gateway gets here on every
+		// connection.
+		slog.DebugContext(active.ctx, "atunnel dropped an egress connection: actor egress is not active",
+			slog.String("actorUID", active.actorUID))
 		_ = downstream.Close()
 		return
 	}
@@ -299,8 +302,9 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 		// Expiry blocks only new tunnels. Connections admitted with a valid
 		// certificate have completed mTLS and are allowed to drain normally.
 		e.mu.Unlock()
-		slog.WarnContext(active.ctx, "atunnel dropped an egress connection: actor certificate expired",
-			slog.String("peer", downstream.RemoteAddr().String()))
+		// renew logs the expiry or the denied renewal once at Warn.
+		slog.DebugContext(active.ctx, "atunnel dropped an egress connection: actor has no valid certificate",
+			slog.String("actorUID", active.actorUID))
 		_ = downstream.Close()
 		return
 	}
