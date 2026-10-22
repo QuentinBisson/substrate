@@ -76,7 +76,7 @@ func TestGoldenBootEgress(t *testing.T) {
 			}
 		})
 		// Before the resume, so the gateway never caches a missing policy.
-		e2e.EnsureEgressPolicy(t, ctx, clients, ref, e2e.EgressAllowHTTPS(origin.SvcName()))
+		e2e.EnsureEgressPolicy(t, ctx, clients, ref, e2e.EgressAllowHTTPS(origin.SvcName(), origin.SvcName()+".cluster.local"))
 		if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 			t.Fatalf("ResumeActor %q: %v", id, err)
 		}

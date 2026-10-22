@@ -52,10 +52,13 @@ volumes:
         - field: ACTOR_METADATA_FIELD_NAME
           path: actor-id
 ${TEMPLATE_TRUST_BUNDLE}
+# The actor resolves BOOT_FETCH_HOST through its search path, and the DNS relay
+# answers only names the policy lists, so the policy also lists the name the
+# search path expands it to.
 goldenEgressPolicy:
   rules:
   - https:
-      hostnames: ["${BOOT_FETCH_HOST}"]
+      hostnames: ["${BOOT_FETCH_HOST}", "${BOOT_FETCH_HOST}.cluster.local"]
 resources:
   limits:
     cpuMillicores: 1000
