@@ -1089,8 +1089,6 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			}
 		}
 	}()
-	// As in RunWorkload: egress before the containers restore, ingress after
-	// the wakeup probe.
 	err = s.tunnel.ActivateEgress(attribution, egress)
 	timing.activate = lap(&tLast)
 	if err != nil {
