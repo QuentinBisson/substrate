@@ -96,6 +96,9 @@ atelet:
 
 # Object storage credentials/settings for snapshot transfers and private sandbox assets.
 objectStorePlugin:
+  # Required for GCS: the Google service account the exchange impersonates
+  # for actor-scoped snapshot transfers. Unused by S3/RustFS.
+  transferServiceAccount: ""
   extraEnv: []
   control:
     resources: {}

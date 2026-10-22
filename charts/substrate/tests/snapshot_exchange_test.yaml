@@ -30,15 +30,22 @@ tests:
   - equal:
       path: data.ATE_API_SNAPSHOT_LOCATION
       value: gs://custom-snapshots/
+  - equal:
+      path: data.ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+      value: ""
 - it: uses an explicit external snapshot location
   template: ate-api-server-envvars.yaml
   set:
     rustfs.enabled: false
     ateApi.snapshotLocation: gs://external/prefix/
+    objectStorePlugin.transferServiceAccount: snapshot-transfer@example.iam.gserviceaccount.com
   asserts:
   - equal:
       path: data.ATE_API_SNAPSHOT_LOCATION
       value: gs://external/prefix/
+  - equal:
+      path: data.ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+      value: snapshot-transfer@example.iam.gserviceaccount.com
 - it: requires a snapshot location for external storage
   template: ate-api-server-envvars.yaml
   set:
@@ -75,6 +82,9 @@ tests:
       content: --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
   - contains:
       path: spec.template.spec.initContainers[0].args
+      content: --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
+  - contains:
+      path: spec.template.spec.initContainers[0].args
       content: --ateapi-server-name=custom-api.custom-system.svc
   - contains:
       path: spec.template.spec.initContainers[0].env
@@ -84,6 +94,14 @@ tests:
           configMapKeyRef:
             name: ate-api-server-envvars
             key: ATE_API_ACTOR_JWT_ISSUER
+  - contains:
+      path: spec.template.spec.initContainers[0].env
+      content:
+        name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+        valueFrom:
+          configMapKeyRef:
+            name: ate-api-server-envvars
+            key: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
   - contains:
       path: spec.template.spec.initContainers[0].volumeMounts
       content:

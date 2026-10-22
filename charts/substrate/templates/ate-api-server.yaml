@@ -94,6 +94,7 @@ spec:
         - --socket=/run/objectstore-plugin/control.sock
         - --exchange-listen=:8445
         - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
+        - --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
         - '--ateapi-server-name={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc'
         ports:
         - name: exchange
@@ -117,6 +118,11 @@ spec:
             configMapKeyRef:
               name: {{ .Values.ateApiServerEnvVarsConfigMap }}
               key: ATE_API_ACTOR_JWT_ISSUER
+        - name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.ateApiServerEnvVarsConfigMap }}
+              key: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
