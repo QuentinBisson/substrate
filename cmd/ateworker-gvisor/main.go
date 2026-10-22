@@ -671,7 +671,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			}
 		}
 	}()
-	// Egress before the sandbox starts, ingress after the wakeup probe (see
+	// Egress is activated before the sandbox starts, ingress is activated after the wakeup probe (see
 	// tunnel.Tunnel.ActivateEgress).
 	if err := s.tunnel.ActivateEgress(attribution, egress); err != nil {
 		return nil, err
