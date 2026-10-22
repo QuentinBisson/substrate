@@ -413,3 +413,38 @@ func TestBootFetchFailsAfterBudget(t *testing.T) {
 		t.Fatalf("bootFetch() error = %v, want the last status", err)
 	}
 }
+
+// A restored actor resumes past the boot fetch with its own identity, so its
+// wakeup probe fails until that identity has fetched.
+func TestRestoreFetchGatesHealthzOnIdentity(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+	identity := filepath.Join(t.TempDir(), "actor-id")
+	writeIdentity := func(id string) {
+		t.Helper()
+		if err := os.WriteFile(identity, []byte(id), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &restoreFetch{url: origin.URL, identityFile: identity, trustBundle: writeServerTrustBundle(t, origin), fetched: "golden"}
+	healthz := func() int {
+		rec := httptest.NewRecorder()
+		f.healthz(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		return rec.Code
+	}
+
+	writeIdentity("golden")
+	if got := healthz(); got != http.StatusOK {
+		t.Fatalf("healthz as the actor that booted = %d, want 200", got)
+	}
+	writeIdentity("restored")
+	if got := healthz(); got != http.StatusServiceUnavailable {
+		t.Fatalf("healthz as a restored actor before it fetched = %d, want 503", got)
+	}
+	f.fetch("restored")
+	if got := healthz(); got != http.StatusOK {
+		t.Fatalf("healthz as a restored actor after it fetched = %d, want 200", got)
+	}
+}

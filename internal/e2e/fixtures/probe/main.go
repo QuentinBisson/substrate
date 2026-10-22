@@ -35,6 +35,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -516,6 +517,55 @@ func bootFetch(ctx context.Context, url, trustBundle string, budget time.Duratio
 	}
 }
 
+// restoreFetch answers the wakeup probe once the actor named in its identity
+// file has fetched url. A restore from the golden snapshot resumes past main's
+// boot fetch with the restored actor's identity, so its wakeup probe passes
+// only if the restored actor reaches url too. The prober times out each request
+// after wakeupprobe.RequestTimeout, so the fetch runs in the background while
+// /healthz answers 503.
+type restoreFetch struct {
+	url, identityFile, trustBundle string
+
+	mu       sync.Mutex
+	fetched  string
+	fetching string
+}
+
+func (f *restoreFetch) healthz(w http.ResponseWriter, _ *http.Request) {
+	b, err := os.ReadFile(f.identityFile)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	id := string(b)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id == f.fetched {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if f.fetching != id {
+		f.fetching = id
+		go f.fetch(id)
+	}
+	http.Error(w, "fetching "+f.url+" as "+id, http.StatusServiceUnavailable)
+}
+
+func (f *restoreFetch) fetch(id string) {
+	err := bootFetch(context.Background(), f.url, f.trustBundle, bootFetchBudget)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fetching == id {
+		f.fetching = ""
+	}
+	if err != nil {
+		log.Printf("probe: restore fetch as %s: %v", id, err)
+		return
+	}
+	log.Printf("probe: restore fetch of %s as %s succeeded", f.url, id)
+	f.fetched = id
+}
+
 func fetchOnce(ctx context.Context, client *http.Client, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -534,11 +584,18 @@ func fetchOnce(ctx context.Context, client *http.Client, url string) error {
 }
 
 func main() {
+	healthz := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	if url := os.Getenv(bootFetchURLEnv); url != "" {
+		booted, err := os.ReadFile(identityFile)
+		if err != nil {
+			log.Fatalf("probe: reading %s: %v", identityFile, err)
+		}
 		if err := bootFetch(context.Background(), url, trustFile, bootFetchBudget); err != nil {
 			log.Fatalf("probe: %v", err)
 		}
 		log.Printf("probe: boot fetch of %s succeeded", url)
+		f := &restoreFetch{url: url, identityFile: identityFile, trustBundle: trustFile, fetched: string(booted)}
+		healthz = f.healthz
 	}
 
 	// Hold the identity file open before serving: every snapshot of this actor
@@ -558,7 +615,7 @@ func main() {
 	mux.HandleFunc("/lookup", lookup)
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/healthz", healthz)
 
 	const addr = ":80"
 	log.Printf("probe listening on %s", addr)

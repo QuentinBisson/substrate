@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var bootFetchManifests = e2e.SubstrateFixtureManifests{
@@ -31,7 +32,8 @@ var bootFetchManifests = e2e.SubstrateFixtureManifests{
 // gateway before it listens, and exits if it cannot, so its template gets a
 // golden snapshot only if the worker tunneled the golden actor's egress
 // before the wakeup probe and the gateway admitted the actor while it was
-// still resuming.
+// still resuming. An actor restored from that snapshot then has to fetch again
+// as itself before its wakeup probe passes, which covers the restore paths.
 //
 //	hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -run TestGoldenBootEgress -v -args --no-color
 func TestGoldenBootEgress(t *testing.T) {
@@ -46,7 +48,30 @@ func TestGoldenBootEgress(t *testing.T) {
 
 	// DeploySubstrateFixture returns once every template has its golden
 	// snapshot, which is the assertion.
-	e2e.DeploySubstrateFixture(t, ctx, clients, bootFetchManifests, env["BUCKET_NAME"], "egressmitm-bootfetch", []string{e2e.EgressTrustBundleName},
+	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, bootFetchManifests, env["BUCKET_NAME"], "egressmitm-bootfetch", []string{e2e.EgressTrustBundleName},
 		e2e.WithGoldenEgressPolicy(e2e.EgressAllowHTTPS(origin.SvcName())),
 		e2e.WithTemplateValue("BOOT_FETCH_URL", "https://"+origin.SvcName()+"/healthz"))
+
+	t.Run("restore", func(t *testing.T) {
+		const id = "bootfetch-restore"
+		ref := &ateapipb.ObjectRef{Atespace: atespace, Name: id}
+		if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: id},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: "probe-bootfetch"},
+		}}); err != nil {
+			t.Fatalf("CreateActor %q: %v", id, err)
+		}
+		t.Cleanup(func() {
+			_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+			if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+				t.Logf("cleanup: DeleteActor %q failed: %v", id, err)
+			}
+		})
+		// Before the resume, so the gateway never caches a missing policy.
+		e2e.EnsureEgressPolicy(t, ctx, clients, ref, e2e.EgressAllowHTTPS(origin.SvcName()))
+		if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+			t.Fatalf("ResumeActor %q: %v", id, err)
+		}
+		waitForActorState(t, ctx, clients, atespace, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	})
 }
