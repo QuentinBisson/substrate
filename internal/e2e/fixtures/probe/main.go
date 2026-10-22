@@ -479,17 +479,14 @@ func writeJSON(w http.ResponseWriter, v any) {
 // it proves the actor had egress while it booted.
 const bootFetchURLEnv = "PROBE_BOOT_FETCH_URL"
 
-// bootFetchBudget bounds the boot fetch, inside the template's wakeupProbe
+// bootFetchTimeout bounds the boot fetch, inside the template's wakeupProbe
 // timeout.
-const bootFetchBudget = 45 * time.Second
+const bootFetchTimeout = 30 * time.Second
 
-// bootFetch GETs url, trusting only trustBundle, until it answers 200 or
-// budget runs out. It retries because the gateway caches a missing
-// EgressPolicy for its TTL, and a suite can only give the golden actor one
-// once the actor exists.
-func bootFetch(ctx context.Context, url, trustBundle string, budget time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
+// bootFetch GETs url once, trusting only trustBundle, and fails unless it
+// answers 200. It does not retry: the actor's EgressPolicy exists before the
+// actor resumes, so a failure is the finding.
+func bootFetch(ctx context.Context, url, trustBundle string) error {
 	b, err := os.ReadFile(trustBundle)
 	if err != nil {
 		return fmt.Errorf("reading trust bundle: %w", err)
@@ -499,22 +496,14 @@ func bootFetch(ctx context.Context, url, trustBundle string, budget time.Duratio
 		return fmt.Errorf("no certificates parsed from %s", trustBundle)
 	}
 	client := &http.Client{
-		Timeout:   10 * time.Second,
+		Timeout:   bootFetchTimeout,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}},
 	}
 	defer client.CloseIdleConnections()
-	for {
-		lastErr := fetchOnce(ctx, client, url)
-		if lastErr == nil {
-			return nil
-		}
-		log.Printf("probe: boot fetch of %s: %v", url, lastErr)
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("boot fetch of %s: %w", url, lastErr)
-		case <-time.After(time.Second):
-		}
+	if err := fetchOnce(ctx, client, url); err != nil {
+		return fmt.Errorf("boot fetch of %s: %w", url, err)
 	}
+	return nil
 }
 
 // restoreFetch answers the wakeup probe once the actor named in its identity
@@ -552,7 +541,7 @@ func (f *restoreFetch) healthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (f *restoreFetch) fetch(id string) {
-	err := bootFetch(context.Background(), f.url, f.trustBundle, bootFetchBudget)
+	err := bootFetch(context.Background(), f.url, f.trustBundle)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fetching == id {
@@ -590,7 +579,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("probe: reading %s: %v", identityFile, err)
 		}
-		if err := bootFetch(context.Background(), url, trustFile, bootFetchBudget); err != nil {
+		if err := bootFetch(context.Background(), url, trustFile); err != nil {
 			log.Fatalf("probe: %v", err)
 		}
 		log.Printf("probe: boot fetch of %s succeeded", url)

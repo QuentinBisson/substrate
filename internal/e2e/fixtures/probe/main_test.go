@@ -380,37 +380,37 @@ func writeServerTrustBundle(t *testing.T, server *httptest.Server) string {
 	return path
 }
 
-// A golden actor's EgressPolicy can land after its boot started, and the
-// gateway caches the missing policy for a while, so the boot fetch retries
-// until the origin answers.
-func TestBootFetchRetriesUntilOK(t *testing.T) {
-	var calls atomic.Int32
-	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if calls.Add(1) < 3 {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer origin.Close()
-
-	if err := bootFetch(t.Context(), origin.URL, writeServerTrustBundle(t, origin), 30*time.Second); err != nil {
-		t.Fatalf("bootFetch() error = %v, want nil", err)
+// The actor's EgressPolicy exists before it resumes, so the boot fetch makes
+// one request and reports its failure.
+func TestBootFetch(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		wantErr string
+	}{
+		{name: "origin answers 200", status: http.StatusOK},
+		{name: "origin denies", status: http.StatusForbidden, wantErr: "status 403"},
 	}
-	if got := calls.Load(); got != 3 {
-		t.Errorf("origin saw %d requests, want 3", got)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(tt.status)
+			}))
+			defer origin.Close()
 
-func TestBootFetchFailsAfterBudget(t *testing.T) {
-	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer origin.Close()
-
-	err := bootFetch(t.Context(), origin.URL, writeServerTrustBundle(t, origin), 1500*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "status 403") {
-		t.Fatalf("bootFetch() error = %v, want the last status", err)
+			err := bootFetch(t.Context(), origin.URL, writeServerTrustBundle(t, origin))
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("bootFetch() error = %v, want nil", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("bootFetch() error = %v, want %q", err, tt.wantErr)
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("origin saw %d requests, want 1", got)
+			}
+		})
 	}
 }
 
@@ -446,5 +446,43 @@ func TestRestoreFetchGatesHealthzOnIdentity(t *testing.T) {
 	f.fetch("restored")
 	if got := healthz(); got != http.StatusOK {
 		t.Fatalf("healthz as a restored actor after it fetched = %d, want 200", got)
+	}
+}
+
+// A failed restore fetch leaves healthz at 503, and the next wakeup probe
+// starts another fetch.
+func TestRestoreFetchRetriesOnNextProbe(t *testing.T) {
+	var deny atomic.Bool
+	deny.Store(true)
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if deny.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+	identity := filepath.Join(t.TempDir(), "actor-id")
+	if err := os.WriteFile(identity, []byte("restored"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &restoreFetch{url: origin.URL, identityFile: identity, trustBundle: writeServerTrustBundle(t, origin), fetched: "golden"}
+	healthz := func() int {
+		rec := httptest.NewRecorder()
+		f.healthz(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		return rec.Code
+	}
+
+	f.fetch("restored")
+	if got := healthz(); got != http.StatusServiceUnavailable {
+		t.Fatalf("healthz after a failed fetch = %d, want 503", got)
+	}
+	deny.Store(false)
+	deadline := time.Now().Add(10 * time.Second)
+	for healthz() != http.StatusOK {
+		if time.Now().After(deadline) {
+			t.Fatal("healthz did not answer 200 after the origin allowed the fetch")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

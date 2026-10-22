@@ -16,9 +16,9 @@
 # ateapipb.ActorTemplate whose probe fetches the suite's BOOT_FETCH_URL through the
 # egress gateway before it listens, so its golden snapshot exists only if the
 # actor had egress while it booted. Selects the probe pool of probe.yaml.tmpl;
-# the suite gives the golden actor its EgressPolicy (see
-# e2e.WithGoldenEgressPolicy), the template the trust bundle, and the URL (see
-# e2e.WithTemplateValue).
+# goldenEgressPolicy (preview gate GoldenEgressPolicy) allows the golden actor
+# to reach BOOT_FETCH_HOST; the suite gives the template the trust bundle and
+# BOOT_FETCH_HOST and BOOT_FETCH_URL (see e2e.WithTemplateValue).
 
 metadata:
   atespace: ate-e2e-probe${FIXTURE_SUFFIX}
@@ -36,7 +36,7 @@ containers:
   volumeMounts:
   - name: system-info
     mountPath: /run/ate
-  # Longer than the probe's own boot-fetch budget, so a failed fetch is the
+  # Longer than the probe's boot fetch timeout, so a failed fetch is the
   # probe's logged error rather than a probe timeout.
   wakeupProbe:
     httpGet:
@@ -52,6 +52,10 @@ volumes:
         - field: ACTOR_METADATA_FIELD_NAME
           path: actor-id
 ${TEMPLATE_TRUST_BUNDLE}
+goldenEgressPolicy:
+  rules:
+  - https:
+      hostnames: ["${BOOT_FETCH_HOST}"]
 resources:
   limits:
     cpuMillicores: 1000

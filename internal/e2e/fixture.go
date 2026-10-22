@@ -92,7 +92,6 @@ func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapipb.ActorTe
 type FixtureOption func(*fixtureConfig)
 
 type fixtureConfig struct {
-	goldenEgress   []*ateapipb.EgressRule
 	templateValues map[string]string
 }
 
@@ -105,38 +104,6 @@ func WithTemplateValue(name, value string) FixtureOption {
 		}
 		c.templateValues["${"+name+"}"] = value
 	}
-}
-
-// WithGoldenEgressPolicy gives each template's golden actor an EgressPolicy
-// with rules, for a fixture whose workload reaches the network before it is
-// ready. The gateway denies an actor with no policy, and the golden actor
-// exists only once its template does, so the policy lands after the golden
-// boot has started: the workload must retry what it fetches.
-func WithGoldenEgressPolicy(rules ...*ateapipb.EgressRule) FixtureOption {
-	return func(c *fixtureConfig) { c.goldenEgress = rules }
-}
-
-// ensureGoldenEgressPolicy waits for tmpl's golden actor to exist and gives it
-// an EgressPolicy with rules. Deleting the template deletes the golden actor
-// and its policy with it.
-func ensureGoldenEgressPolicy(t *testing.T, ctx context.Context, clients *Clients, tmpl *ateapipb.ActorTemplate, rules []*ateapipb.EgressRule) {
-	t.Helper()
-	golden := &ateapipb.ObjectRef{Atespace: tmpl.GetMetadata().GetAtespace(), Name: tmpl.GetMetadata().GetUid()}
-	deadline := time.Now().Add(2 * time.Minute)
-	for {
-		_, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: golden})
-		if err == nil {
-			break
-		}
-		if status.Code(err) != codes.NotFound {
-			t.Fatalf("GetActor for the golden actor of %s/%s: %v", tmpl.GetMetadata().GetAtespace(), tmpl.GetMetadata().GetName(), err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("golden actor of %s/%s was not created within 2m", tmpl.GetMetadata().GetAtespace(), tmpl.GetMetadata().GetName())
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	EnsureEgressPolicy(t, ctx, clients, golden, rules...)
 }
 
 // SubstrateFixtureManifests names the two manifest templates a substrate
@@ -234,12 +201,6 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 			}
 		})
 		created = append(created, c)
-	}
-
-	if cfg.goldenEgress != nil {
-		for _, tmpl := range created {
-			ensureGoldenEgressPolicy(t, ctx, clients, tmpl, cfg.goldenEgress)
-		}
 	}
 
 	for _, tmpl := range created {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -32,11 +33,13 @@ var bootFetchManifests = e2e.SubstrateFixtureManifests{
 // gateway before it listens, and exits if it cannot, so its template gets a
 // golden snapshot only if the worker tunneled the golden actor's egress
 // before the wakeup probe and the gateway admitted the actor while it was
-// still resuming. An actor restored from that snapshot then has to fetch again
+// still resuming. The template's goldenEgressPolicy gives the golden actor its
+// policy before the controller resumes it. An actor restored from that snapshot then has to fetch again
 // as itself before its wakeup probe passes, which covers the restore paths.
 //
 //	hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -run TestGoldenBootEgress -v -args --no-color
 func TestGoldenBootEgress(t *testing.T) {
+	e2e.RequirePreview(t, preview.GateGoldenEgressPolicy)
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -49,7 +52,7 @@ func TestGoldenBootEgress(t *testing.T) {
 	// DeploySubstrateFixture returns once every template has its golden
 	// snapshot, which is the assertion.
 	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, bootFetchManifests, env["BUCKET_NAME"], "egressmitm-bootfetch", []string{e2e.EgressTrustBundleName},
-		e2e.WithGoldenEgressPolicy(e2e.EgressAllowHTTPS(origin.SvcName())),
+		e2e.WithTemplateValue("BOOT_FETCH_HOST", origin.SvcName()),
 		e2e.WithTemplateValue("BOOT_FETCH_URL", "https://"+origin.SvcName()+"/healthz"))
 
 	t.Run("restore", func(t *testing.T) {
