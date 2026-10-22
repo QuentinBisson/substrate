@@ -93,6 +93,18 @@ func reseedGuestCRNG(ctx context.Context, ac randomDevReseeder) error {
 	return ac.ReseedRandomDev(rctx, nonce)
 }
 
+// reseedThenActivateEgress reseeds a restored guest's CRNG and only then
+// activates its egress, so nothing leaves the host drawn from CRNG state the
+// actor shares with the snapshot's other clones, and a failed reseed is still
+// safe to retry (see restoreGuestReadyError). The restored workload is past its
+// boot, so it needs egress only from the wakeup probe on.
+func reseedThenActivateEgress(ctx context.Context, ac randomDevReseeder, activateEgress func() error) error {
+	if err := reseedGuestCRNG(ctx, ac); err != nil {
+		return restoreGuestReadyError(ctx, "reseeding guest CRNG", err)
+	}
+	return activateEgress()
+}
+
 // newReseedNonce returns 32 bytes of fresh entropy to mix into the guest CRNG.
 func newReseedNonce() ([]byte, error) {
 	nonce := make([]byte, 32)
@@ -458,19 +470,15 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// and notifies the guest before unpausing the vCPUs, so a >=5.18 kernel reseeds its
 	// CRNG on its own with no host round-trip, no per-restore RPC, and no post-Resume
 	// race. At that point this agent-driven reseed can be dropped.
-	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
-		return restoreGuestReadyError(ctx, "reseeding guest CRNG", err)
-	}
-	tReseeded := time.Now()
-
-	// Egress after the reseed, so nothing leaves the host drawn from CRNG state
-	// the actor shares with the snapshot's other clones, and so a failure above
-	// is still safe to retry (see restoreGuestReadyError). The restored workload
-	// is past its boot, so it needs egress only from the wakeup probe on.
-	// Ingress follows the wakeup probe, as in coldBootActor.
-	if err := s.tunnel.ActivateEgress(p.attribution(), egress); err != nil {
+	//
+	// Egress opens only once the reseed succeeds; ingress follows the wakeup
+	// probe, as in coldBootActor.
+	if err := reseedThenActivateEgress(ctx, guestAC, func() error {
+		return s.tunnel.ActivateEgress(p.attribution(), egress)
+	}); err != nil {
 		return err
 	}
+	tReseeded := time.Now()
 
 	// Block until every wakeup-probe-enabled container reports 200.
 	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {

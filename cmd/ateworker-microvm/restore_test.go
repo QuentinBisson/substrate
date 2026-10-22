@@ -549,6 +549,57 @@ func TestReseedGuestCRNG(t *testing.T) {
 	})
 }
 
+func TestReseedThenActivateEgress(t *testing.T) {
+	t.Run("a failed reseed leaves egress inactive and the restore retryable", func(t *testing.T) {
+		reseedErr := errors.New("agent busy")
+		activated := false
+		err := reseedThenActivateEgress(t.Context(), fakeReseeder(func(context.Context, []byte) error {
+			return reseedErr
+		}), func() error {
+			activated = true
+			return nil
+		})
+		if activated {
+			t.Error("egress was activated after a failed reseed")
+		}
+		if !errors.Is(err, reseedErr) {
+			t.Errorf("err = %v, want it to wrap %v", err, reseedErr)
+		}
+		if got := apierror.Code(err); got != codes.Unavailable {
+			t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Unavailable, err)
+		}
+	})
+
+	t.Run("activates egress once, after the reseed", func(t *testing.T) {
+		var steps []string
+		err := reseedThenActivateEgress(t.Context(), fakeReseeder(func(context.Context, []byte) error {
+			steps = append(steps, "reseed")
+			return nil
+		}), func() error {
+			steps = append(steps, "egress")
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("reseedThenActivateEgress: %v", err)
+		}
+		if got, want := strings.Join(steps, ","), "reseed,egress"; got != want {
+			t.Errorf("steps = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("returns the activation error", func(t *testing.T) {
+		activateErr := errors.New("egress already active")
+		err := reseedThenActivateEgress(t.Context(), fakeReseeder(func(context.Context, []byte) error {
+			return nil
+		}), func() error {
+			return activateErr
+		})
+		if !errors.Is(err, activateErr) {
+			t.Errorf("err = %v, want %v", err, activateErr)
+		}
+	})
+}
+
 func TestRestoreGuestReadyError(t *testing.T) {
 	// Child timeouts in dialAgentRetry and reseedGuestCRNG wrap a real
 	// context.DeadlineExceeded.
