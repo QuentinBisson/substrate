@@ -29,9 +29,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestKubernetesCredentialInjection uses the Helm values in values.yaml, real
@@ -93,12 +93,12 @@ func TestKubernetesCredentialInjection(t *testing.T) {
 				atespace, actorTemplate = deniedAtespace, deniedTemplate
 				actorName = "allowed"
 			}
-			actor := &ateapipb.ObjectRef{Atespace: atespace, Name: actorName}
-			_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actor})
-			_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actor})
-			_, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: actorTemplate.GetMetadata().GetName()},
+			actor := &ateapi.ObjectRef{Atespace: atespace, Name: actorName}
+			_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actor})
+			_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: actor})
+			_, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: atespace, Name: actorName},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: atespace, Name: actorTemplate.GetMetadata().GetName()},
 			}})
 			require.NoError(t, err)
 			cleanupTest := t
@@ -108,21 +108,21 @@ func TestKubernetesCredentialInjection(t *testing.T) {
 			cleanupTest.Cleanup(func() {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
-				_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: actor})
-				_, err := clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actor})
+				_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapi.SuspendActorRequest{Actor: actor})
+				_, err := clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: actor})
 				if err != nil {
 					cleanupTest.Errorf("delete actor %s/%s: %v", atespace, actorName, err)
 				}
 			})
 			rule := e2e.EgressAllowHTTP(host)
 			if tc.secret != "" {
-				rule.Http.Effects = &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{{
+				rule.Http.Effects = &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{{
 					Header: "authorization", Prefix: "Bearer ",
 					CredentialUri: fmt.Sprintf("ate-secret://k8s.io/default/%s/%s/token", tc.secretNamespace, tc.secret),
 				}}}
 			}
 			e2e.EnsureEgressPolicy(t, ctx, clients, actor, rule)
-			_, err = clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actor})
+			_, err = clients.SubstrateAPI.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actor})
 			require.NoError(t, err)
 			path := "/fetch?roots=system&url=" + url.QueryEscape("http://"+host+"/credential")
 			if tc.authorization != "" {

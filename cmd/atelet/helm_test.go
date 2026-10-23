@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -219,7 +219,7 @@ func TestHelmGVisorSandboxConfigMatchesManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got, want atev1alpha1.SandboxConfig
+	var got, want atev1.SandboxConfig
 	if err := yaml.Unmarshal(out, &got); err != nil {
 		t.Fatal(err)
 	}

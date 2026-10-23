@@ -33,8 +33,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 // ProviderName is the ate-secret:// URI host this backend serves.
@@ -112,10 +112,10 @@ func ParseURI(raw string) (SecretRef, error) {
 	return ref, nil
 }
 
-// Server implements credproviderpb.CredentialProviderServer over the Kubernetes
+// Server implements credprovider.CredentialProviderServer over the Kubernetes
 // API.
 type Server struct {
-	credproviderpb.UnimplementedCredentialProviderServer
+	credprovider.UnimplementedCredentialProviderServer
 
 	client kubernetes.Interface
 	// nsAuth restricts which namespaces an atespace may resolve secrets from.
@@ -131,7 +131,7 @@ func NewServer(client kubernetes.Interface, nsAuth *NamespaceAuthorizer) *Server
 func (s *Server) Grants() map[string][]string { return s.nsAuth.Grants() }
 
 // FetchSecret resolves one ate-secret:// URI to its Secret value.
-func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecretRequest) (*credproviderpb.FetchSecretResponse, error) {
+func (s *Server) FetchSecret(ctx context.Context, req *credprovider.FetchSecretRequest) (*credprovider.FetchSecretResponse, error) {
 	ref, err := ParseURI(req.GetUri())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -179,7 +179,7 @@ func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecre
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "secret %s/%s: %v", ref.Namespace, ref.Name, err)
 	}
-	return &credproviderpb.FetchSecretResponse{OpaqueBytes: value}, nil
+	return &credprovider.FetchSecretResponse{OpaqueBytes: value}, nil
 }
 
 // authorize checks the actor identity and its namespace grant before reading

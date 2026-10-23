@@ -8,7 +8,10 @@ description: Merge agent-substrate/substrate upstream/main into the kagent-dev/s
 The fork uses merge-based synchronization. Start a branch from current
 `origin/main`, merge `upstream/main`, and submit that branch to `origin/main`.
 Preserve upstream ancestry so later synchronizations contain only new changes.
-Do not replay fork commits, squash upstream history, force-push, or push to main.
+Each sync PR must contain exactly one sync merge commit on top of `origin/main`,
+with all conflict resolutions, integration fixes, and skill updates folded into
+it. Preserve the incoming upstream commits; do not squash their history.
+Do not replay fork commits or push to main.
 Creating a PR requires an explicit request or approval; approval to create it
 does not authorize merging it.
 
@@ -31,9 +34,9 @@ does not authorize merging it.
    render check excludes preserved manifests, so passing it alone does not
    establish parity. Keep `charts/substrate-crds/templates` synchronized with
    generated CRDs.
-6. Commit the merge with `git commit -s`. Keep any additional fixes or workflow
-   documentation in focused signed-off commits. Omit issue and PR references
-   from commit messages.
+6. Commit the merge with `git commit -s`. Fold later fixes and documentation
+   into that same commit with `git commit --amend -s`; do not leave follow-up
+   commits on the sync branch. Omit issue and PR references from commit messages.
 
 ## Validate and investigate failures
 
@@ -56,9 +59,18 @@ that the failure is resolved. Report test counts and skips when relevant.
 
 ## Publish the PR
 
-Before publishing, fetch both refs again and incorporate any new main changes
-with merges. Verify that both recorded main tips are ancestors of the branch,
-the diff is intentional, and the worktree is clean. Push only the sync branch.
+Before publishing, fetch both refs again. If either main tip changed, rebuild
+the single merge from the latest `origin/main` and `upstream/main`, reapplying
+and checking the integration fixes. Do not stack additional merge commits.
+Verify that `git rev-list --first-parent --count origin/main..HEAD` returns `1`
+and HEAD has exactly two parents: `origin/main` first, `upstream/main` second.
+Check that the diff is intentional and the worktree is clean.
+
+Push only the sync branch. When amending an already published merge, verify
+the remote still matches the last observed PR head and push with an explicit
+`--force-with-lease=refs/heads/<sync-branch>:<observed-sha>`. Never force-push
+unguarded or overwrite another contributor's changes. Verify that folding
+commits preserved the intended tree, and report checks for the new commit SHA.
 
 When PR creation is authorized, open it against `kagent-dev/substrate:main`.
 Describe the upstream SHA, material changes, conflict resolutions, required

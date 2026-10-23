@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/localca"
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	corev1 "k8s.io/api/core/v1"
@@ -337,7 +337,7 @@ func TestProviderMTLS(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns1"}, Data: map[string][]byte{"token": []byte("credential")},
 	})
 	srv := grpc.NewServer(grpc.Creds(creds))
-	credproviderpb.RegisterCredentialProviderServer(srv, NewServer(client, &NamespaceAuthorizer{allowed: map[string]map[string][]grant{"team-a": {"ns1": {{}}}}}))
+	credprovider.RegisterCredentialProviderServer(srv, NewServer(client, &NamespaceAuthorizer{allowed: map[string]map[string][]grant{"team-a": {"ns1": {{}}}}}))
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -367,7 +367,7 @@ func TestProviderMTLS(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			before := len(client.Actions())
-			resp, err := credproviderpb.NewCredentialProviderClient(conn).FetchSecret(ctx, &credproviderpb.FetchSecretRequest{
+			resp, err := credprovider.NewCredentialProviderClient(conn).FetchSecret(ctx, &credprovider.FetchSecretRequest{
 				Uri: "ate-secret://k8s.io/default/ns1/api/token", ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/a",
 			})
 			if tc.allowed {

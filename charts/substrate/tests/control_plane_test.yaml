@@ -16,6 +16,7 @@ suite: Control plane integration
 templates:
 - ate-api-server.yaml
 - ate-api-config.yaml
+- ate-controller.yaml
 - role.yaml
 - atelet.yaml
 - k8s-credential-provider.yaml
@@ -120,6 +121,14 @@ tests:
   - equal:
       path: spec.template.spec.containers[0].readinessProbe.httpGet.port
       value: health
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --status-address=127.0.0.1:4040
+  - notContains:
+      path: spec.template.spec.containers[0].ports
+      content:
+        name: statusz
+        containerPort: 4040
 - it: denies ingress by default in the release namespace
   template: ate-system-networkpolicies.yaml
   documentSelector:
@@ -260,6 +269,49 @@ tests:
         apiGroups: [ate.dev]
         resources: [sandboxconfigs]
         verbs: [get, list, patch, watch]
+  - notContains:
+      path: rules
+      content:
+        apiGroups: [""]
+        resources: [secrets]
+        verbs: [get, list, watch]
+- it: limits controller secret reads to the MITM CA pool in the release namespace
+  template: role.yaml
+  documentSelector:
+    path: kind
+    value: Role
+  asserts:
+  - equal:
+      path: metadata.namespace
+      value: custom-system
+  - contains:
+      path: rules
+      content:
+        apiGroups: [""]
+        resourceNames: [egress-mitm-ca-pool]
+        resources: [secrets]
+        verbs: [get, list, watch]
+- it: grants the controller its namespaced permissions
+  template: ate-controller.yaml
+  documentSelector:
+    path: kind
+    value: RoleBinding
+  asserts:
+  - equal:
+      path: metadata.namespace
+      value: custom-system
+  - equal:
+      path: roleRef
+      value:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: custom-ate-controller
+  - equal:
+      path: subjects
+      value:
+      - kind: ServiceAccount
+        name: custom-ate-controller
+        namespace: custom-system
 - it: limits API configuration reads to pools and CSI drivers
   template: ate-api-server.yaml
   documentSelector:

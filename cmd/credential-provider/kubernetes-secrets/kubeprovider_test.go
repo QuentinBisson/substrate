@@ -34,7 +34,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/api/credprovider/v1"
 )
 
 func TestParseURI(t *testing.T) {
@@ -188,7 +188,7 @@ func TestFetchSecretAuthorization(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(secret)
 			srv := NewServer(client, authz)
-			resp, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{Uri: tc.uri, ActorSpiffeId: tc.actorSpiffeID})
+			resp, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{Uri: tc.uri, ActorSpiffeId: tc.actorSpiffeID})
 			if tc.wantCode != codes.OK {
 				if len(client.Actions()) != 0 {
 					t.Fatal("denied request reached Kubernetes")
@@ -210,7 +210,7 @@ func TestFetchSecretAuthorization(t *testing.T) {
 	// A missing authorizer must fail closed.
 	t.Run("nil authorizer denies", func(t *testing.T) {
 		srv := NewServer(fake.NewSimpleClientset(secret), nil)
-		if _, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
+		if _, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 			Uri:           "ate-secret://k8s.io/default/ns1/example-api/token",
 			ActorSpiffeId: teamAURI,
 		}); status.Code(err) != codes.PermissionDenied {
@@ -275,7 +275,7 @@ func TestFetchSecret(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(secret, multiKey)
 			srv := NewServer(client, &NamespaceAuthorizer{allowed: map[string]map[string][]grant{"team-a": {"ns1": {{}}}}})
-			resp, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{Uri: tc.uri, ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor"})
+			resp, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{Uri: tc.uri, ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor"})
 			if tc.wantCode != codes.OK {
 				if status.Code(err) != tc.wantCode {
 					t.Fatalf("FetchSecret(%q) code = %v, want %v (err=%v)", tc.uri, status.Code(err), tc.wantCode, err)
@@ -337,7 +337,7 @@ func TestFetchSecretKubernetesErrors(t *testing.T) {
 			client := fake.NewSimpleClientset()
 			client.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, tc.err })
 			srv := NewServer(client, &NamespaceAuthorizer{allowed: map[string]map[string][]grant{"team-a": {"ns1": {{}}}}})
-			_, err := srv.FetchSecret(t.Context(), &credproviderpb.FetchSecretRequest{
+			_, err := srv.FetchSecret(t.Context(), &credprovider.FetchSecretRequest{
 				Uri: "ate-secret://k8s.io/default/ns1/api/token", ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/a",
 			})
 			if status.Code(err) != tc.code {
@@ -354,7 +354,7 @@ func TestFetchSecretObservesRotation(t *testing.T) {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns1"}, Data: map[string][]byte{"token": []byte("first")}}
 	client := fake.NewSimpleClientset(secret)
 	srv := NewServer(client, &NamespaceAuthorizer{allowed: map[string]map[string][]grant{"team-a": {"ns1": {{}}}}})
-	req := &credproviderpb.FetchSecretRequest{Uri: "ate-secret://k8s.io/default/ns1/api/token", ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/a"}
+	req := &credprovider.FetchSecretRequest{Uri: "ate-secret://k8s.io/default/ns1/api/token", ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/a"}
 	first, err := srv.FetchSecret(t.Context(), req)
 	if err != nil || string(first.GetOpaqueBytes()) != "first" {
 		t.Fatalf("first fetch: %v, %v", first, err)
@@ -418,7 +418,7 @@ func TestFetchSecretSecretNarrowing(t *testing.T) {
 				t.Fatalf("newNamespaceAuthorizer: %v", err)
 			}
 			srv := NewServer(fake.NewSimpleClientset(model, caPool), authz)
-			resp, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
+			resp, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 				Uri:           "ate-secret://k8s.io/default/ns1/" + tc.secret + "/token",
 				ActorSpiffeId: actorURI,
 			})
@@ -643,7 +643,7 @@ func TestFetchSecretLabelGrantHidesExistence(t *testing.T) {
 	}), authz)
 
 	ask := func(name string) (codes.Code, string) {
-		_, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
+		_, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 			Uri:           "ate-secret://k8s.io/default/ns1/" + name + "/token",
 			ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
 		})
@@ -675,7 +675,7 @@ func TestFetchSecretMissingSecretIsPermissionDeniedWhenEnforced(t *testing.T) {
 		t.Fatalf("newNamespaceAuthorizer: %v", err)
 	}
 	srv := NewServer(fake.NewSimpleClientset(), authz)
-	if _, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
+	if _, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 		Uri:           "ate-secret://k8s.io/default/ns1/no-such-secret/token",
 		ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
 	}); status.Code(err) != codes.PermissionDenied {

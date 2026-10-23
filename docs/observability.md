@@ -171,7 +171,7 @@ ateapi's `Actor state changed` is written once per committed actor state transit
  "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
 ```
 
-`ate.actor.state` takes the `ateapipb.ActorState` values lowercased, so the log vocabulary and the state machine cannot fork. The last record for an actor's uid is the state it is in now, and its timestamp is when that state began. Query it per actor, not in aggregate: neither key is a metric label, because both only ever appear beside actor identity, which [the cardinality rules](#the-metric-registry) keep off metrics entirely.
+`ate.actor.state` takes the `ateapi.ActorState` values lowercased, so the log vocabulary and the state machine cannot fork. The last record for an actor's uid is the state it is in now, and its timestamp is when that state began. Query it per actor, not in aggregate: neither key is a metric label, because both only ever appear beside actor identity, which [the cardinality rules](#the-metric-registry) keep off metrics entirely.
 
 `ate.actor.operation.name` says which operation drove the transition, which the state alone does not: an actor reaches `suspended` both when it is created and when it is suspended. SuspendActor in either durability mode is one operation, labeled `suspend`.
 
@@ -179,7 +179,7 @@ The record goes out after the store commit, never before, and the state is read 
 
 Creating an actor counts as a change. A new actor is born suspended, so it gets a record saying so, with `ate.actor.operation.name` set to `create`. Otherwise an actor that is created and never resumed would have no record at all, no matter how long you keep your logs.
 
-`deleted` is the only state with no `ateapipb.ActorState` behind it. It is written once the actor row is gone, so there is nothing left to read back. It is also the last record an actor ever gets. Without it, `deleting` would be the end of the story, and a delete that finished would look just like one that got stuck.
+`deleted` is the only state with no `ateapi.ActorState` behind it. It is written once the actor row is gone, so there is nothing left to read back. It is also the last record an actor ever gets. Without it, `deleting` would be the end of the story, and a delete that finished would look just like one that got stuck.
 
 **What this stream won't tell you.** It only writes when something changes. So an actor that has been sitting in the same state since before your logs roll over has no record, and no state. Ask the control plane what state something is in right now. Use this stream to see how it got there and when. Records can also go missing, like any other log, and a gap looks the same as an actor that just sat still. If you want to count activations, use the router's access log instead.
 
@@ -320,7 +320,7 @@ For `ate.workerpool.workers`:
   When one backend receives several clusters, add `cluster` to both groupings, or same-named pools in different clusters merge.
 
 For `atenet.router.route.duration`:
-* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
+* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, `denied`, or `resume_error`. `denied` is a request the router refused by policy (a 403 or `PermissionDenied`), such as an egress request outside the actor's egress policy; `resume_error` is left for a resume that failed for any other reason, a router defect.
 * The router and the scheduler both report `no_capacity` for one condition, but they count different events. The scheduler records one sample on `ate.scheduler.assignment.duration` for each resume. The router records one sample for each request. Many requests can join one resume, and one parked request can cause more than one resume. Thus do not compare the two counts directly.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (the resume found the actor already running), `triggered` (this request completed a cold activation), `joined` (this request waited on another request's resume, which activated the actor), or `unknown` (the resume did not complete, so whether an activation ran is unknown). `ate.template.atespace` and `ate.template.name` hold `unknown` when the router has no template to name.
 
