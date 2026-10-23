@@ -23,7 +23,7 @@ which namespaces each actor may use. Empty policies deny all requests.
 
 AGW must support protocol-specific egress rules and `replace_headers`, along with
 the [actor identity update](https://github.com/agentgateway/agentgateway/pull/3677)
-and the current [FetchSecret contract](../pkg/proto/credproviderpb/credprovider.proto).
+and the current [FetchSecret contract](../api/credprovider/v1/credprovider.proto).
 
 Create the MITM CA Secret using the existing installation tooling:
 

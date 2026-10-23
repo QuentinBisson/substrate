@@ -84,6 +84,18 @@ See `values.yaml` for the full set; the important keys:
 
 ## Upgrading sandbox and snapshot configuration
 
+Public APIs now use versioned packages under `api/`. Upgrade clients, control
+plane, workers, credential providers, object-store plugins, and agentgateway
+together: gRPC service names now start with `substrate.<api-name>.v1`.
+
+WorkerPool, SandboxConfig, and CSIDriverConfig resources now use `ate.dev/v1`.
+Update custom manifests and install `substrate-crds` before the application
+chart. Existing clusters need a storage-version migration before replacing the
+old CRDs: Kubernetes rejects the v1-only definitions while `status.storedVersions`
+still contains `v1alpha1`. This release does not provide a conversion webhook or
+an automated migration. Back up existing resources and plan their migration
+before upgrading.
+
 External volumes now require `preview: [ExternalVolumes]` and a client that opts
 in to the same gate (for `kubectl ate`, pass `--preview=ExternalVolumes`).
 Actor and ActorTemplate container resource limits must include positive CPU and
