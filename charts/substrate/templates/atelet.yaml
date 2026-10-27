@@ -159,6 +159,7 @@ spec:
           periodSeconds: 2
           failureThreshold: 30
         securityContext:
+          allowPrivilegeEscalation: false
           runAsUser: 0
           runAsGroup: 0
           capabilities:
@@ -203,6 +204,7 @@ spec:
 {{ toYaml . | indent 8 }}
 {{- end }}
         securityContext:
+          allowPrivilegeEscalation: false
           runAsUser: 0
           runAsGroup: 0
           capabilities:
