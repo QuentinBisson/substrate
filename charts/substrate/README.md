@@ -140,10 +140,19 @@ snapshot bucket, and let the API server's identity impersonate it. See
 [the GCP setup guide](../../tools/setup-gcp/README.md#what-create-iam-actually-grants)
 for the required IAM grants. S3 and RustFS do not need this setting.
 
-The default gVisor config now uses the 2026-10-17 nightly (`v4`) for separate
+The default gVisor config now uses release `20261019.0` (`v5`) for separate
 container-rootfs and durable-directory checkpoint bundles. Upgrade the sandbox config together with ateworker-gvisor;
 custom configs must pin a release with the same checkpoint support and supply
 the `gvisor` release tarball asset. Bare `runsc` assets are no longer accepted.
+This replaces the previous `v4` config. Existing `v4` memory snapshots need a
+compatible runtime; falling back to a durable filesystem snapshot does not
+restore the actor's memory.
+
+When upgrading an installation with RustFS enabled, delete its completed bucket
+initializer Job before running `helm upgrade`. The default Job name is
+`rustfs-bucket-init` in the release namespace. This update changes the AWS CLI
+image, and Kubernetes cannot patch an existing Job's pod template. Helm
+recreates the Job, which keeps the existing bucket and its contents.
 
 The chart now denies ingress to the control-plane namespace by default and
 allows the component, router, egress, storage, and monitoring traffic it needs.
@@ -160,6 +169,10 @@ Update API clients for pagination under `ListOptions`, the renamed
 clients and components together.
 
 ## PostgreSQL setup
+
+Upstream squashed the migrations through v0.6.0 into `000001_initial.sql`.
+Databases created before that squash cannot be upgraded in place and must be
+recreated. See [PostgreSQL schema evolution](../../docs/dev/postgresql-schema-evolution.md).
 
 The chart does not deploy or initialize PostgreSQL. Prepare the database,
 schema, login users, and the configured `readWriteRole` and `ownerRole` before
